@@ -20,7 +20,7 @@
  * 
  * @return int 
  */
-int get_last_sys_errno()
+int get_sys_errno()
 {
     int err = 0;
 #ifdef XQC_SYS_WINDOWS
@@ -29,6 +29,15 @@ int get_last_sys_errno()
     err = errno;
 #endif
     return err;
+}
+
+void set_sys_errno(int err)
+{
+#ifdef XQC_SYS_WINDOWS
+    WSASetLastError(err);
+#else
+    errno = err;
+#endif
 }
 
 /**
@@ -49,14 +58,4 @@ void xqc_platform_init_env()
 #endif
 
 }
-
-void set_last_sys_errno(int err)
-{
-#ifdef XQC_SYS_WINDOWS
-    WSASetLastError(err);
-#else
-    errno = err;
-#endif
-}
-
 #endif

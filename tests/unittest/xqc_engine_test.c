@@ -10,7 +10,6 @@
 #include "src/transport/xqc_cid.h"
 #include "xquic/xquic_typedef.h"
 #include "src/common/xqc_str.h"
-#include "src/common/xqc_timer.h"
 #include "src/transport/xqc_conn.h"
 #include "src/congestion_control/xqc_new_reno.h"
 #include "src/transport/xqc_packet_parser.h"
@@ -50,7 +49,7 @@ xqc_test_engine_packet_process()
                                              sizeof(XQC_TEST_LONG_HEADER_PACKET_B) - 1,
                                              (struct sockaddr *)(&local_addr), local_addrlen,
                                              (struct sockaddr *)(&peer_addr), peer_addrlen,
-                                             recv_time, NULL);
+                                             recv_time, NULL);                                          
     //CU_ASSERT(rc == XQC_OK);
 
     /* get connection */

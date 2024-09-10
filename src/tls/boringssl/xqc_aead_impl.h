@@ -65,6 +65,7 @@
 /* chacha20 follow openssl impl */
 #define XQC_CIPHER_INIT_CHACHA20_IMPL(obj) do {                             \
     xqc_hdr_protect_cipher_t *___cipher = (obj);                            \
+    ___cipher->cipher   = NULL;                                             \
     ___cipher->keylen   = 32;                                               \
     ___cipher->noncelen = 16;                                               \
     ___cipher->hp_mask = xqc_bssl_hp_mask_chacha20;                         \
@@ -73,14 +74,14 @@
 
 /* extern */
 
-xqc_int_t xqc_bssl_aead_encrypt(const xqc_pkt_protect_aead_t *pp_aead,
+xqc_int_t xqc_bssl_aead_encrypt(const xqc_pkt_protect_aead_t *pp_aead, void *aead_ctx,
     uint8_t *dest, size_t destcap, size_t *destlen,
     const uint8_t *plaintext, size_t plaintextlen,
     const uint8_t *key, size_t keylen,
     const uint8_t *nonce, size_t noncelen,
     const uint8_t *ad, size_t adlen);
 
-xqc_int_t xqc_bssl_aead_decrypt(const xqc_pkt_protect_aead_t *pp_aead,
+xqc_int_t xqc_bssl_aead_decrypt(const xqc_pkt_protect_aead_t *pp_aead, void *aead_ctx,
     uint8_t *dest, size_t destcap, size_t *destlen,
     const uint8_t *ciphertext, size_t ciphertextlen,
     const uint8_t *key, size_t keylen,
@@ -88,13 +89,13 @@ xqc_int_t xqc_bssl_aead_decrypt(const xqc_pkt_protect_aead_t *pp_aead,
     const uint8_t *ad, size_t adlen);
 
 
-xqc_int_t xqc_bssl_hp_mask(const xqc_hdr_protect_cipher_t *hp_cipher,
+xqc_int_t xqc_bssl_hp_mask(const xqc_hdr_protect_cipher_t *hp_cipher, void *aead_ctx,
     uint8_t *dest, size_t destcap, size_t *destlen,
     const uint8_t *plaintext, size_t plaintextlen,
     const uint8_t *key, size_t keylen,
     const uint8_t *sample, size_t samplelen);
 
-xqc_int_t xqc_bssl_hp_mask_chacha20(const xqc_hdr_protect_cipher_t *hp_cipher,
+xqc_int_t xqc_bssl_hp_mask_chacha20(const xqc_hdr_protect_cipher_t *hp_cipher, void *hp_ctx,
     uint8_t *dest, size_t destcap, size_t *destlen,
     const uint8_t *plaintext, size_t plaintextlen,
     const uint8_t *key, size_t keylen,

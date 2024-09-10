@@ -63,6 +63,10 @@ if (XQC_DISABLE_LOG)
     set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} -DXQC_DISABLE_LOG")
 endif()
 
+if(XQC_COMPAT_GENERATE_SR_PKT)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DXQC_COMPAT_GENERATE_SR_PKT")
+endif()
+
 if (XQC_ONLY_ERROR_LOG)
     set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} -DXQC_ONLY_ERROR_LOG")
 endif()
@@ -70,6 +74,10 @@ endif()
 if (XQC_ENABLE_EVENT_LOG)
     set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} -DXQC_ENABLE_EVENT_LOG ")
 endif()
+
+if (DISABLE_WARNINGS)
+    add_compile_options("-Wno-error")
+endif ()
 
 if(ANDROID)
     set(DYMAMIC_LINK_OPTION 
@@ -98,8 +106,8 @@ if (XQC_BUILD_OPENSSL)
         endif()
 
     else()
-        #set(EXTRA_CONFIGURE_OPENSSL_PARAMS "${EXTRA_CONFIGURE_OPENSSL_PARAMS} ${DYNAMIC_COMPILE_FLAGS} ")
-        #add_subdirectory(external/openssl-cmake)
+        set(EXTRA_CONFIGURE_OPENSSL_PARAMS "${EXTRA_CONFIGURE_OPENSSL_PARAMS} ${DYNAMIC_COMPILE_FLAGS} ")
+        add_subdirectory(external/openssl-cmake)
     endif()
 
     set(DYMAMIC_LINK_OPTION 
@@ -121,7 +129,11 @@ else()
 endif()
 
 
-configure_file (xqc_configure.h.in include/xquic/xqc_configure.h  @ONLY)
+configure_file (
+    "${CMAKE_CURRENT_SOURCE_DIR}/xqc_configure.h.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/xquic/xqc_configure.h"
+    @ONLY
+)
 
 include_directories(
     include/
@@ -133,7 +145,6 @@ include_directories(
 # http3/qpack source
 set(
     HTTP3_SOURCES
-    "src/http3/xqc_var_buf.c"
     "src/http3/xqc_h3_conn.c"
     "src/http3/xqc_h3_stream.c"
     "src/http3/xqc_h3_request.c"
@@ -150,6 +161,8 @@ set(
     "src/http3/qpack/xqc_ins.c"
     "src/http3/qpack/stable/xqc_stable.c"
     "src/http3/qpack/dtable/xqc_dtable.c"
+    "src/http3/xqc_h3_ext_dgram.c"
+    "src/http3/xqc_h3_ext_bytestream.c"
 )
 
 # Transport source
@@ -162,17 +175,71 @@ set(
     "src/transport/xqc_packet_parser.c"
     "src/transport/xqc_frame_parser.c"
     "src/transport/xqc_stream.c"
+    "src/transport/xqc_datagram.c"
     "src/transport/xqc_packet_out.c"
     "src/transport/xqc_packet_in.c"
     "src/transport/xqc_send_ctl.c"
+    "src/transport/xqc_send_queue.c"
     "src/transport/xqc_packet.c"
     "src/transport/xqc_frame.c"
     "src/transport/xqc_recv_record.c"
     "src/transport/xqc_pacing.c"
     "src/transport/xqc_utils.c"
+    "src/transport/xqc_multipath.c"
     "src/transport/xqc_defs.c"
     "src/transport/xqc_transport_params.c"
+    "src/transport/xqc_quic_lb.c"
+    "src/transport/xqc_timer.c"
+    "src/transport/xqc_reinjection.c"
+    "src/transport/reinjection_control/xqc_reinj_default.c"
+    "src/transport/reinjection_control/xqc_reinj_deadline.c"
+    "src/transport/reinjection_control/xqc_reinj_dgram.c"
+    "src/transport/scheduler/xqc_scheduler_minrtt.c"
+    "src/transport/scheduler/xqc_scheduler_common.c"
+    "src/transport/scheduler/xqc_scheduler_backup.c"
+    "src/transport/scheduler/xqc_scheduler_rap.c"
 )
+
+if(XQC_ENABLE_MP_INTEROP)
+    set(
+        TRANSPORT_SOURCES
+        ${TRANSPORT_SOURCES}
+        "src/transport/scheduler/xqc_scheduler_interop.c"
+    )
+endif()
+
+
+# fec framework
+set(
+    FEC_FRAMEWORK_SOURCE
+    "src/transport/xqc_fec.c"
+    "src/transport/xqc_fec_scheme.c"
+    "src/transport/fec_schemes/xqc_galois_calculation.c"
+)
+
+if(XQC_ENABLE_XOR)
+    set(
+        FEC_FRAMEWORK_SOURCE
+        ${FEC_FRAMEWORK_SOURCE}
+        "src/transport/fec_schemes/xqc_xor.c"
+    )
+endif()
+
+if(XQC_ENABLE_RSC)
+    set(
+        FEC_FRAMEWORK_SOURCE
+        ${FEC_FRAMEWORK_SOURCE}
+        "src/transport/fec_schemes/xqc_reed_solomon.c"
+    )
+endif()
+
+if(XQC_ENABLE_FEC)
+    set(
+        TRANSPORT_SOURCES
+        ${TRANSPORT_SOURCES}
+        ${FEC_FRAMEWORK_SOURCE}
+    )
+endif()
 
 # TLS source
 set (
@@ -188,17 +255,17 @@ if(${SSL_TYPE} MATCHES "boringssl")
     set(
         TLS_SOURCE
         ${TLS_SOURCE}
-        "src/tls/boringssl/xqc_hkdf.c"
-        "src/tls/boringssl/xqc_crypto.c"
-        "src/tls/boringssl/xqc_ssl_if.c"
+        "src/tls/boringssl/xqc_hkdf_impl.c"
+        "src/tls/boringssl/xqc_crypto_impl.c"
+        "src/tls/boringssl/xqc_ssl_if_impl.c"
     )
 elseif(${SSL_TYPE} MATCHES "babassl")
     set(
         TLS_SOURCE
         ${TLS_SOURCE}
-        "src/tls/babassl/xqc_hkdf.c"
-        "src/tls/babassl/xqc_crypto.c"
-        "src/tls/babassl/xqc_ssl_if.c"
+        "src/tls/babassl/xqc_hkdf_impl.c"
+        "src/tls/babassl/xqc_crypto_impl.c"
+        "src/tls/babassl/xqc_ssl_if_impl.c"
     )
 endif()
 
@@ -212,11 +279,13 @@ set(
     "src/common/xqc_time.c"
     "src/common/utils/huffman/xqc_huffman_code.c"
     "src/common/utils/huffman/xqc_huffman.c"
-    "src/common/utils/vint/xqc_discrete_vint_parser.c"
+    "src/common/utils/vint/xqc_discrete_int_parser.c"
     "src/common/utils/vint/xqc_variable_len_int.c"
     "src/common/utils/ringarray/xqc_ring_array.c"
     "src/common/utils/ringmem/xqc_ring_mem.c"
     "src/common/utils/2d_hash/xqc_2d_hash_table.c"
+    "src/common/utils/var_buf/xqc_var_buf.c"
+
 )
 
 # congestion control
@@ -228,9 +297,7 @@ set(
     "src/congestion_control/xqc_sample.c"
 )
 
-if (XQC_DISABLE_RENO)
-    set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} -DXQC_DISABLE_RENO")
-else()
+if(XQC_ENABLE_RENO)
     set(
         CONGESTION_CONTROL_SOURCES
         ${CONGESTION_CONTROL_SOURCES}
@@ -238,14 +305,31 @@ else()
     )
 endif()
 
-if (XQC_ENABLE_BBR2)
-    set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} -DXQC_ENABLE_BBR2")
+if(XQC_ENABLE_BBR2)
     set(
         CONGESTION_CONTROL_SOURCES
         ${CONGESTION_CONTROL_SOURCES}
         "src/congestion_control/xqc_bbr2.c"
     )
 endif()
+
+if(XQC_ENABLE_COPA)
+    set(
+        CONGESTION_CONTROL_SOURCES
+        ${CONGESTION_CONTROL_SOURCES}
+        "src/congestion_control/xqc_copa.c"
+    )
+endif()
+
+if(XQC_ENABLE_UNLIMITED)
+    set(
+        CONGESTION_CONTROL_SOURCES
+        ${CONGESTION_CONTROL_SOURCES}
+        "src/congestion_control/xqc_unlimited_cc.c"
+    )
+endif()
+
+
 
 if (XQC_NO_SHARED)
     set(XQC_BINARY_TYPE STATIC)
@@ -288,3 +372,4 @@ if (XQC_BUILD_SAMPLE)
     target_link_libraries(test_client xquic event)
     target_link_libraries(test_server xquic event)
 endif()
+

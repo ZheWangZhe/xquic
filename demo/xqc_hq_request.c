@@ -78,14 +78,10 @@ xqc_hq_request_create(xqc_engine_t *engine, xqc_hq_conn_t *hqc, const xqc_cid_t 
         return NULL;
     }
 
-    /* init app-level callbacks */
-    if (xqc_hq_ctx_get_request_callbacks(&hqr->hqr_cbs) != XQC_OK) {
-        PRINT_LOG("get app-level request callbacks error\n");
-        goto fail;
-    }
+    hqr->hqr_cbs = &hqc->hqr_cbs;
 
     /* create stream, make hqr the user_data of xqc_stream_t */
-    stream = xqc_stream_create(engine, cid, hqr);
+    stream = xqc_stream_create(engine, cid, NULL, hqr);
     if (NULL == stream) {
         PRINT_LOG("create transport-level stream error");
         goto fail;
@@ -114,12 +110,9 @@ xqc_hq_request_create_passive(xqc_stream_t *stream)
         return NULL;
     }
 
-    /* init app-level callbacks */
-    if (xqc_hq_ctx_get_request_callbacks(&hqr->hqr_cbs) != XQC_OK) {
-        PRINT_LOG("get app-level request callbacks error");
-        xqc_hq_request_destroy(hqr);
-        return NULL;
-    }
+    xqc_hq_conn_t *hqc = xqc_get_conn_alp_user_data_by_stream(stream);
+
+    hqr->hqr_cbs = &hqc->hqr_cbs;
 
     /* make hqr the user_data of xqc_stream_t */
     xqc_stream_set_user_data(stream, hqr);
@@ -235,13 +228,23 @@ xqc_hq_request_send_rsp(xqc_hq_request_t *hqr, const uint8_t *res_buf, size_t re
 
 
 ssize_t
-xqc_hq_parse_req(xqc_hq_request_t *hqr, char *res, size_t sz)
+xqc_hq_parse_req(xqc_hq_request_t *hqr, char *res, size_t sz, uint8_t *fin)
 {
     char method[16] = {0};
     int ret = sscanf(hqr->req_recv_buf, "%s %s", method, res);
     if (ret <= 0) {
         PRINT_LOG("|parse hq request failed: %s", hqr->req_recv_buf);
         return -XQC_EPROTO;
+    }
+
+    int request_line_len = strlen(method) + strlen(res) + 1; /* method + ' ' + path */
+    if (request_line_len + 2 <= hqr->recv_buf_len
+        && (*(hqr->req_recv_buf + request_line_len) == '\r')
+        && (*(hqr->req_recv_buf + request_line_len + 1) == '\n'))
+    {
+        /* check CR LF for hq request line */
+        *fin = 1;
+        PRINT_LOG("|hq recv CR LF|");
     }
 
     return strlen(res);
@@ -280,10 +283,6 @@ xqc_hq_request_recv_req(xqc_hq_request_t *hqr, char *res_buf, size_t buf_sz, uin
 
     } while (read > 0 && !hqr->fin);
 
-    /* return until all request bytes are received */
-    if (!hqr->fin) {
-        return XQC_OK;
-    }
 
     if (NULL == hqr->resource_buf) {
         hqr->resource_buf = xqc_malloc(XQC_HQ_REQUEST_RESOURCE_MAX_LEN);
@@ -294,9 +293,20 @@ xqc_hq_request_recv_req(xqc_hq_request_t *hqr, char *res_buf, size_t buf_sz, uin
         hqr->resource_buf_sz = XQC_HQ_REQUEST_RESOURCE_MAX_LEN;
     }
 
-    read = xqc_hq_parse_req(hqr, hqr->resource_buf, XQC_HQ_REQUEST_RESOURCE_MAX_LEN);
+    uint8_t req_fin = 0;
+    read = xqc_hq_parse_req(hqr, hqr->resource_buf, XQC_HQ_REQUEST_RESOURCE_MAX_LEN, &req_fin);
     if (read <= 0) {
-        return -XQC_EPROTO;
+        if (!hqr->fin) {
+            /* return until all request bytes are received in the current request */
+            return XQC_OK;
+        } else {
+            return -XQC_EPROTO;
+        }
+    }
+
+    /* return until all request bytes are received in the current request */
+    if (!hqr->fin && !req_fin) {
+        return XQC_OK;
     }
 
     if (buf_sz < hqr->resource_read_offset) {
@@ -306,7 +316,10 @@ xqc_hq_request_recv_req(xqc_hq_request_t *hqr, char *res_buf, size_t buf_sz, uin
     if (hqr->resource_read_offset < strlen(hqr->resource_buf)) {
         read = (ssize_t)strncpy(res_buf, hqr->resource_buf, buf_sz);
         hqr->resource_read_offset += read;
-        *fin = hqr->fin;
+        *fin = (hqr->fin || req_fin);
+
+    } else {
+        read = 0;
     }
 
     return read;
@@ -315,13 +328,68 @@ xqc_hq_request_recv_req(xqc_hq_request_t *hqr, char *res_buf, size_t buf_sz, uin
 ssize_t
 xqc_hq_request_recv_rsp(xqc_hq_request_t *hqr, char *res_buf, size_t buf_sz, uint8_t *fin)
 {
-    return xqc_stream_recv(hqr->stream, res_buf, buf_sz, fin);
+    ssize_t ret = xqc_stream_recv(hqr->stream, res_buf, buf_sz, fin);
+    if (ret > 0) {
+        hqr->recv_cnt += ret;
+    }
+    return ret;
 }
 
 void
 xqc_hq_request_set_user_data(xqc_hq_request_t *hqr, void *user_data)
 {
     hqr->user_data = user_data;
+}
+
+xqc_request_stats_t
+xqc_hq_request_get_stats(xqc_hq_request_t *hqr)
+{
+    xqc_request_stats_t stats;
+    xqc_memzero(&stats, sizeof(stats));
+
+    xqc_stream_t *stream    = hqr->stream;
+    uint64_t conn_err       = hqr->stream->stream_conn->conn_err;
+
+    stats.recv_body_size    = hqr->recv_cnt;
+    stats.send_body_size    = hqr->sent_cnt;
+    stats.stream_err        = conn_err != 0 ? conn_err : hqr->stream->stream_err;
+
+    char *buff = stats.stream_info;
+    size_t buff_size = XQC_STREAM_INFO_LEN;
+    size_t cursor = 0, ret = 0;
+    int i;
+
+    for (int i = 0; i < XQC_MAX_PATHS_COUNT; ++i) {
+        if ((stream->paths_info[i].path_send_bytes > 0)
+            || (stream->paths_info[i].path_recv_bytes > 0))
+        {
+
+            ret = snprintf(buff + cursor, buff_size - cursor, 
+                            "%"PRIu64"-%"PRIu64"-%"PRIu64"-%"PRIu64"-%"PRIu64"#",
+                            stream->paths_info[i].path_id,
+                            stream->paths_info[i].path_pkt_send_count,
+                            stream->paths_info[i].path_pkt_recv_count,
+                            stream->paths_info[i].path_send_bytes,
+                            stream->paths_info[i].path_recv_bytes);
+            cursor += ret;
+
+            if (cursor >= buff_size) {
+                goto full;
+            }
+        }
+    }
+
+full:
+    cursor = xqc_min(cursor, buff_size);
+    for (i = cursor - 1; i >= 0; i--) {
+        if (buff[i] == '-' || buff[i] == '#') {
+            buff[i] = '\0';
+            break;
+        }
+    }
+    buff[buff_size - 1] = '\0';
+
+    return stats;
 }
 
 

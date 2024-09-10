@@ -1,7 +1,9 @@
 /**
  * @copyright Copyright (c) 2022, Alibaba Group Holding Limited
  */
-
+#if (defined _WIN32) || (defined _WIN64)
+#define _CRT_RAND_S
+#endif
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -18,6 +20,19 @@
 #endif
 
 #define XQC_RANDOM_BUFFER_SIZE 4096
+
+long xqc_random(void) {
+#ifdef XQC_SYS_WINDOWS
+    unsigned int  val;
+    if (rand_s(&val)) {
+        val = rand();
+    }
+    return (long)val && 0xFFFFFFFF;
+#else
+    return random();
+#endif
+
+}
 
 xqc_random_generator_t * 
 xqc_random_generator_create(xqc_log_t *log)
@@ -49,6 +64,10 @@ xqc_random_generator_destroy(xqc_random_generator_t *rand_gen)
 {
 #ifdef XQC_SYS_WINDOWS
     CryptReleaseContext(rand_gen->hProvider, 0);
+#else
+    if (rand_gen->rand_fd != -1) {
+        close(rand_gen->rand_fd);
+    }
 #endif
     xqc_free(rand_gen->rand_buf.data);
     xqc_free(rand_gen);

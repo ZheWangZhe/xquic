@@ -13,6 +13,10 @@
 #include "src/common/xqc_common.h"
 #ifdef XQC_SYS_WINDOWS
 #include <wincrypt.h>
+#undef PKCS7_SIGNER_INFO
+#undef X509_CERT_PAIR
+#undef X509_EXTENSIONS
+#undef X509_NAME
 #endif
 
 
@@ -32,6 +36,7 @@ typedef struct xqc_random_generator_s {
 xqc_int_t xqc_get_random(xqc_random_generator_t *rand_gen, u_char *buf, size_t need_len);
 xqc_random_generator_t *xqc_random_generator_create(xqc_log_t *log);
 void xqc_random_generator_destroy(xqc_random_generator_t *rand_gen);
+long xqc_random(void);
 
 
 #endif /* _XQC_RANDOM_H_INCLUDED_ */

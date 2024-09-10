@@ -12,16 +12,17 @@
 #define CIPHER_SUIT_LEN     256
 #define TLS_GROUPS_LEN      64
 
-#define PATH_LEN            512
-#define RESOURCE_LEN        256
+#define PATH_LEN            1024
+#define RESOURCE_LEN        1024
 #define AUTHORITY_LEN       128
-#define URL_LEN             512
+#define URL_LEN             1024
 
 /* the congestion control types */
 typedef enum cc_type_s {
     CC_TYPE_BBR,
     CC_TYPE_CUBIC,
-    CC_TYPE_RENO
+    CC_TYPE_RENO,
+    CC_TYPE_COPA
 } CC_TYPE;
 
 
@@ -58,6 +59,10 @@ typedef enum h3_hdr_type {
 
     H3_HDR_CNT
 } H3_HDR_TYPE;
+
+
+extern long xqc_random(void);
+extern xqc_usec_t xqc_now();
 
 
 int

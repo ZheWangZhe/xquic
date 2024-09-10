@@ -15,6 +15,7 @@ typedef char bool;
 #define TRUE 1
 #define FALSE 0
 #define MSEC2SEC 1000000
+#define XQC_BBR_DISABLE_CWND_AI
 
 typedef enum {
     /* Start phase quickly to fill pipe */
@@ -28,7 +29,7 @@ typedef enum {
 } xqc_bbr_mode;
 
 typedef enum {
-    BBR_NOT_IN_RECOVERY=0,
+    BBR_NOT_IN_RECOVERY = 0,
     BBR_IN_RECOVERY,
 } xqc_bbr_recovery_mode;
 
@@ -61,6 +62,7 @@ typedef struct xqc_bbr_s {
     uint32_t               prior_cwnd;
     /* Initial congestion window of connection */
     uint32_t               initial_congestion_window;
+    uint32_t               min_cwnd;
     /* Current pacing rate */
     uint32_t               pacing_rate;
     /* Gain currently applied to pacing rate */
@@ -127,10 +129,12 @@ typedef struct xqc_bbr_s {
     uint64_t               probe_rtt_min_us;
     uint64_t               probe_rtt_min_us_stamp;
 
+#ifndef XQC_BBR_DISABLE_CWND_AI
     uint32_t               snd_cwnd_cnt_bytes; /* For AI */
     uint32_t               beyond_target_cwnd; /* To compete with buffer fillers */
     uint32_t               ai_scale_accumulated_bytes;
     uint32_t               ai_scale;
+#endif
 
 #if XQC_BBR_RTTVAR_COMPENSATION_ENABLED
     /* CWND compensation for RTT variation+ */
@@ -139,6 +143,17 @@ typedef struct xqc_bbr_s {
     uint32_t               rtt_compensation_thresh;
     uint8_t                rttvar_compensation_on;
 #endif
+
+    /* for long-term bw sampling */
+    xqc_bool_t             lt_bw_enabled;
+    uint64_t               lt_last_lost_pkt;
+    uint64_t               lt_last_delivered_bytes;
+    xqc_usec_t             lt_last_stamp;
+    uint64_t               lt_bw;
+    xqc_bool_t             lt_is_sampling;
+    xqc_bool_t             lt_use_bw;
+    uint16_t               lt_rtt_cnt;
+
 } xqc_bbr_t;
 extern const xqc_cong_ctrl_callback_t xqc_bbr_cb;
 

@@ -5,10 +5,11 @@
 #ifndef _XQC_H3_STREAM_H_
 #define _XQC_H3_STREAM_H_
 
-#include "src/http3/xqc_var_buf.h"
+#include "src/common/utils/var_buf/xqc_var_buf.h"
 #include "src/http3/xqc_h3_defs.h"
 #include "src/http3/qpack/xqc_qpack.h"
 #include "src/http3/frame/xqc_h3_frame.h"
+#include "src/transport/xqc_stream.h"
 
 typedef struct xqc_h3_conn_s    xqc_h3_conn_t;
 typedef struct xqc_h3_stream_s  xqc_h3_stream_t;
@@ -22,10 +23,16 @@ typedef enum {
 
     /* bidi stream type */
     XQC_H3_STREAM_TYPE_REQUEST          = 0x10,
+    XQC_H3_STREAM_TYPE_BYTESTEAM        = 0x20,
 
     /* reserved stream type or others */
     XQC_H3_STREAM_TYPE_UNKNOWN          = 0xFFFFFFFFFFFFFFFFull,
 } xqc_h3_stream_type_t;
+
+typedef enum {
+   XQC_H3_BIDI_STREAM_TYPE_REQUEST    = 0,
+   XQC_H3_BIDI_STREAM_TYPE_BYTESTREAM = 1,
+} xqc_h3_bidi_stream_type_t;
 
 typedef enum {
     XQC_HTTP3_STREAM_FLAG_NONE                  = 0x0000,
@@ -53,10 +60,9 @@ typedef enum {
        blocked because the corresponding PUSH_PROMISE has not been
        received yet. */
     XQC_HTTP3_STREAM_FLAG_PUSH_PROMISE_BLOCKED  = 0x0080,
-    /* XQC_HTTP3_STREAM_FLAG_CTRL_PRIORITY_APPLIED indicates that stream
-       has been prioritized by PRIORITY frame received in control
-       stream. */
-    XQC_HTTP3_STREAM_FLAG_CTRL_PRIORITY_APPLIED = 0x0100,
+    /* XQC_HTTP3_STREAM_FLAG_PRIORITY_SET indicates that stream
+       has been prioritized. */
+    XQC_HTTP3_STREAM_FLAG_PRIORITY_SET          = 0x0100,
     /* XQC_HTTP3_STREAM_FLAG_RESET indicates that stream is reset. */
     XQC_HTTP3_STREAM_FLAG_RESET                 = 0x0200,
     XQC_HTTP3_STREAM_NEED_WRITE_NOTIFY          = 0x0400,
@@ -66,11 +72,13 @@ typedef enum {
        blocked and waiting for encoder stream insertions while Transport stream
        notify its close */
     XQC_HTTP3_STREAM_FLAG_ACTIVELY_CLOSED       = 0x1000,
+    /* FIN was sent and no data will be sent any more */
+    XQC_HTTP3_STREAM_FLAG_FIN_SENT              = 0x2000,
 } xqc_h3_stream_flag;
 
 typedef struct xqc_h3_stream_pctx_s {
     /* parsing context for uni-stream type */
-    xqc_discrete_vint_pctx_t        type;
+    xqc_discrete_int_pctx_t         type;
 
     /* parsing context for control-stream */
     xqc_h3_frame_pctx_t             frame_pctx;
@@ -93,7 +101,11 @@ typedef struct xqc_h3_stream_s {
      * available only in request streams, create or dereference in control or
      * reserved streams is forbidden.
      */
-    xqc_h3_request_t               *h3r;
+    union {
+      xqc_h3_request_t               *h3r;
+      xqc_h3_ext_bytestream_t        *h3_ext_bs;
+    };
+    
 
     /* stream type */
     xqc_h3_stream_type_t            type;
@@ -110,6 +122,17 @@ typedef struct xqc_h3_stream_s {
     /* stream send buffer */
     xqc_list_head_t                 send_buf;
 
+    /* stream priority (RFC9218) */
+    xqc_h3_priority_t               priority;
+
+    struct {
+        size_t                      header_len;
+        size_t                      header_sent;
+        size_t                      data_len;
+        size_t                      data_sent;
+        unsigned char               header_buf[16];
+    } data_frame;
+
     /* blocked data buffer, used to store request
        stream data when stream is blocked */
     xqc_list_head_t                 blocked_buf;
@@ -120,11 +143,27 @@ typedef struct xqc_h3_stream_s {
 
     xqc_log_t                      *log;
 
+    xqc_path_metrics_t              paths_info[XQC_MAX_PATHS_COUNT];
+
+   /* referred count of h3 stream */
+    uint32_t                        ref_cnt;
+
+    uint64_t                        recv_rate_limit;
+    uint64_t                        send_offset;
+    uint64_t                        recv_offset;
+
+    uint8_t                         early_data_state;
+
+    char                            begin_trans_state[XQC_STREAM_TRANSPORT_STATE_SZ];
+    char                            end_trans_state[XQC_STREAM_TRANSPORT_STATE_SZ];
+
 } xqc_h3_stream_t;
 
 
 /* transport layer callback hook */
 extern const xqc_stream_callbacks_t h3_stream_callbacks;
+
+void xqc_h3_stream_update_stats(xqc_h3_stream_t *h3s);
 
 xqc_h3_stream_t *xqc_h3_stream_create(xqc_h3_conn_t *h3c, xqc_stream_t *stream,
    xqc_h3_stream_type_t type, void *user_data);
@@ -154,5 +193,12 @@ xqc_int_t xqc_h3_stream_process_blocked_stream(xqc_h3_stream_t *h3s);
 xqc_var_buf_t *xqc_h3_stream_get_send_buf(xqc_h3_stream_t *h3s);
 
 uint64_t xqc_h3_stream_get_err(xqc_h3_stream_t *h3s);
+
+void xqc_h3_stream_get_path_info(xqc_h3_stream_t *h3s);
+
+void xqc_h3_stream_set_priority(xqc_h3_stream_t *h3s, xqc_h3_priority_t *prio);
+
+xqc_int_t xqc_h3_stream_send_bidi_stream_type(xqc_h3_stream_t *h3s, 
+   xqc_h3_bidi_stream_type_t stype, uint8_t fin);
 
 #endif

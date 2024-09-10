@@ -8,21 +8,33 @@
 #ifndef _GETTIMEOFDAY_DEFINED
 #define DELTA_EPOCH_IN_TICKS  116444736000000000ULL
 
+struct timezone {
+    int tz_minuteswest;     /* minutes west of Greenwich */
+    int tz_dsttime;         /* type of DST correction */
+};
+
 int
-gettimeofday(struct timeval *tv, void *tzp)
+gettimeofday(struct timeval *tv, struct timezone *tz)
 {
     FILETIME    ft;
     uint64_t    tmpres;
-
+    static int  tzflag;
     if (NULL != tv) {
         GetSystemTimeAsFileTime(&ft);
-
         tmpres = ((uint64_t) ft.dwHighDateTime << 32)
                | (ft.dwLowDateTime);
-
         tmpres -= DELTA_EPOCH_IN_TICKS;
         tv->tv_sec = tmpres / 10000000;
         tv->tv_usec = tmpres % 1000000;
+    }
+
+    if (NULL != tz) {
+        if (!tzflag) {
+            _tzset();
+            tzflag++;
+        }
+        tz->tz_minuteswest = _timezone / 60;
+        tz->tz_dsttime = _daylight;
     }
 
     return 0;
