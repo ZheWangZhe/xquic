@@ -7,6 +7,7 @@
 
 #include <xquic/xquic.h>
 #include <xquic/xquic_typedef.h>
+#include <xquic/xqc_http3.h>
 #include <xquic/xqc_errno.h>
 
 
@@ -98,7 +99,7 @@ xqc_hq_ctx_destroy(xqc_engine_t *engine);
  * @brief hq connection functions
  */
 
-xqc_hq_conn_t *
+const xqc_cid_t *
 xqc_hq_connect(xqc_engine_t *engine, const xqc_conn_settings_t *conn_settings, 
     const unsigned char *token, unsigned token_len, const char *server_host, int no_crypto_flag,
     const xqc_conn_ssl_config_t *conn_ssl_config, const struct sockaddr *peer_addr,
@@ -143,6 +144,9 @@ xqc_hq_request_recv_rsp(xqc_hq_request_t *hqr, char *res_buf, size_t buf_sz, uin
 
 xqc_int_t
 xqc_hq_request_close(xqc_hq_request_t *hqr);
+
+xqc_request_stats_t
+xqc_hq_request_get_stats(xqc_hq_request_t *hqr);
 
 
 #endif

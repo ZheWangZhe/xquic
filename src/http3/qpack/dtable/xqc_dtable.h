@@ -16,7 +16,7 @@ typedef struct xqc_dtable_s xqc_dtable_t;
  * @brief create a dynamic table object
  * @param htable_buckets the bucket count of 2d hash table
  */
-xqc_dtable_t *xqc_dtable_create(size_t htable_buckets, xqc_log_t *log);
+xqc_dtable_t *xqc_dtable_create(size_t htable_buckets, xqc_log_t *log, size_t need_hash);
 
 
 /**
@@ -45,6 +45,10 @@ xqc_int_t xqc_dtable_set_capacity(xqc_dtable_t *dt, uint64_t capacity);
  */
 xqc_int_t xqc_dtable_add(xqc_dtable_t *dt, unsigned char *name, uint64_t nlen,
     unsigned char *value, uint64_t vlen, uint64_t *idx);
+
+#ifdef XQC_COMPAT_DUPLICATE
+xqc_int_t xqc_dtable_duplicate_compat(xqc_dtable_t *dt, uint64_t idx, uint64_t *new_idx);
+#endif
 
 
 /**

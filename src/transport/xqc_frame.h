@@ -28,11 +28,16 @@ typedef enum {
     XQC_FRAME_PATH_RESPONSE,
     XQC_FRAME_CONNECTION_CLOSE,
     XQC_FRAME_HANDSHAKE_DONE,
-    XQC_FRAME_PATH_STATUS,
     XQC_FRAME_ACK_MP,
-    XQC_FRAME_QOE_CONTROL_SIGNAL,
+    XQC_FRAME_PATH_ABANDON,
+    XQC_FRAME_PATH_STATUS,
+    XQC_FRAME_PATH_STANDBY,
+    XQC_FRAME_PATH_AVAILABLE,
+    XQC_FRAME_DATAGRAM,
     XQC_FRAME_Extension,
     XQC_FRAME_NUM,
+    XQC_FRAME_SID,
+    XQC_FRAME_REPAIR_SYMBOL,
 } xqc_frame_type_t;
 
 typedef enum {
@@ -56,11 +61,16 @@ typedef enum {
     XQC_FRAME_BIT_PATH_RESPONSE         = 1 << XQC_FRAME_PATH_RESPONSE,
     XQC_FRAME_BIT_CONNECTION_CLOSE      = 1 << XQC_FRAME_CONNECTION_CLOSE,
     XQC_FRAME_BIT_HANDSHAKE_DONE        = 1 << XQC_FRAME_HANDSHAKE_DONE,
-    XQC_FRAME_BIT_PATH_STATUS           = 1 << XQC_FRAME_PATH_STATUS,
     XQC_FRAME_BIT_ACK_MP                = 1 << XQC_FRAME_ACK_MP,
-    XQC_FRAME_BIT_QOE_CONTROL_SIGNAL    = 1 << XQC_FRAME_QOE_CONTROL_SIGNAL,
+    XQC_FRAME_BIT_PATH_ABANDON          = 1 << XQC_FRAME_PATH_ABANDON,
+    XQC_FRAME_BIT_PATH_STATUS           = 1 << XQC_FRAME_PATH_STATUS,
+    XQC_FRAME_BIT_PATH_STANDBY          = 1 << XQC_FRAME_PATH_STANDBY,
+    XQC_FRAME_BIT_PATH_AVAILABLE        = 1 << XQC_FRAME_PATH_AVAILABLE,
+    XQC_FRAME_BIT_DATAGRAM              = 1 << XQC_FRAME_DATAGRAM,
     XQC_FRAME_BIT_Extension             = 1 << XQC_FRAME_Extension,
     XQC_FRAME_BIT_NUM                   = 1 << XQC_FRAME_NUM,
+    XQC_FRAME_BIT_SID                   = 1 << XQC_FRAME_SID,
+    XQC_FRAME_BIT_REPAIR_SYMBOL         = 1 << XQC_FRAME_REPAIR_SYMBOL,
 } xqc_frame_type_bit_t;
 
 
@@ -73,7 +83,7 @@ typedef enum {
       CONNECTION_CLOSE frames, are not sent again when packet loss is
       detected, but as described in Section 10.
  */
-#define XQC_IS_ACK_ELICITING(types) ((types) & ~(XQC_FRAME_BIT_ACK | XQC_FRAME_BIT_PADDING | XQC_FRAME_BIT_CONNECTION_CLOSE))
+#define XQC_IS_ACK_ELICITING(types) ((types) & ~(XQC_FRAME_BIT_ACK | XQC_FRAME_BIT_ACK_MP| XQC_FRAME_BIT_PADDING | XQC_FRAME_BIT_CONNECTION_CLOSE | XQC_FRAME_BIT_SID | XQC_FRAME_BIT_REPAIR_SYMBOL))
 
 /*
  * https://tools.ietf.org/html/draft-ietf-quic-recovery-24#section-3
@@ -84,17 +94,17 @@ typedef enum {
    PADDING frames cause packets to contribute toward bytes in flight
       without directly causing an acknowledgment to be sent.
  */
-#define XQC_CAN_IN_FLIGHT(types) ((types) & ~(XQC_FRAME_BIT_ACK | XQC_FRAME_BIT_CONNECTION_CLOSE))
+#define XQC_CAN_IN_FLIGHT(types) ((types) & ~(XQC_FRAME_BIT_ACK | XQC_FRAME_BIT_ACK_MP | XQC_FRAME_BIT_CONNECTION_CLOSE))
 
 
 /*
  * PING and PADDING frames contain no information, so lost PING or
  *     PADDING frames do not require repair
  */
-#define XQC_NEED_REPAIR(types) ((types) & ~(XQC_FRAME_BIT_ACK| XQC_FRAME_BIT_PADDING | XQC_FRAME_BIT_PING | XQC_FRAME_BIT_CONNECTION_CLOSE))
+#define XQC_NEED_REPAIR(types) ((types) & ~(XQC_FRAME_BIT_ACK| XQC_FRAME_BIT_PADDING | XQC_FRAME_BIT_PING | XQC_FRAME_BIT_CONNECTION_CLOSE | XQC_FRAME_BIT_DATAGRAM | XQC_FRAME_BIT_SID | XQC_FRAME_BIT_REPAIR_SYMBOL))
 
 
-const char *xqc_frame_type_2_str(xqc_frame_type_bit_t type_bit);
+const char *xqc_frame_type_2_str(xqc_engine_t *engine, xqc_frame_type_bit_t type_bit);
 
 unsigned int xqc_stream_frame_header_size(xqc_stream_id_t stream_id, uint64_t offset, size_t length);
 
@@ -140,5 +150,24 @@ xqc_int_t xqc_process_new_token_frame(xqc_connection_t *conn, xqc_packet_in_t *p
 
 xqc_int_t xqc_process_handshake_done_frame(xqc_connection_t *conn, xqc_packet_in_t *packet_in);
 
+xqc_int_t xqc_process_path_challenge_frame(xqc_connection_t *conn, xqc_packet_in_t *packet_in);
+
+xqc_int_t xqc_process_path_response_frame(xqc_connection_t *conn, xqc_packet_in_t *packet_in);
+
+xqc_int_t xqc_process_ack_mp_frame(xqc_connection_t *conn, xqc_packet_in_t *packet_in);
+
+xqc_int_t xqc_process_path_abandon_frame(xqc_connection_t *conn, xqc_packet_in_t *packet_in);
+
+xqc_int_t xqc_process_path_status_frame(xqc_connection_t *conn, xqc_packet_in_t *packet_in);
+
+xqc_int_t xqc_process_path_standby_frame(xqc_connection_t *conn, xqc_packet_in_t *packet_in);
+
+xqc_int_t xqc_process_path_available_frame(xqc_connection_t *conn, xqc_packet_in_t *packet_in);
+
+xqc_int_t xqc_process_datagram_frame(xqc_connection_t *conn, xqc_packet_in_t *packet_in);
+
+xqc_int_t xqc_process_sid_frame(xqc_connection_t *conn, xqc_packet_in_t *packet_in);
+
+xqc_int_t xqc_process_repair_frame(xqc_connection_t *conn, xqc_packet_in_t *packet_in);
 
 #endif /* _XQC_FRAME_H_INCLUDED_ */

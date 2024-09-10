@@ -31,44 +31,11 @@ typedef struct xqc_id_hash_table_s {
 } xqc_id_hash_table_t;
 
 
-/* make n to 2 pow  */
-static inline int
-xqc_pow2(unsigned int n)
-{
-  
-    int clz , power = sizeof(n), count1 = 0;
-
-#ifdef __GNUC__
-    count1 = __builtin_popcount(n) ;
-#else
-    while (n) {
-		count1 += n & 1;
-		n >>= 1;
-	}
-#endif
-
-    if (count1 <= 1) {
-        return n ;
-    }
-
-#if defined(XQC_SYS_WINDOWS) && defined(_MSC_VER)
-    /* __lzcnt available beginning VS2008 or up*/
-    _BitScanReverse(&clz, n);
-#else
-    clz = __builtin_clz(n);
-#endif  
-
-    power = (power << 3) - clz ;
-
-    return pow(2 , power);
-}
-
-
 static inline xqc_int_t
 xqc_id_hash_init(xqc_id_hash_table_t *hash_tab,  xqc_allocator_t allocator, size_t bucket_num)
 {
     hash_tab->allocator = allocator;
-    bucket_num = xqc_pow2(bucket_num);
+    bucket_num = xqc_pow2_upper(bucket_num);
     hash_tab->list = allocator.malloc(allocator.opaque, sizeof(xqc_id_hash_node_t *) * bucket_num);
     if (hash_tab->list == NULL) {
         return XQC_ERROR;

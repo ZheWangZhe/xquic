@@ -202,10 +202,21 @@ XQUIC开发团队：大淘宝平台技术团队、达摩院XG实验室以及为�
 * 曾柯(毅丝)
 * 徐盟欣(象谦)
 * Bai Shi(白石)
+* 周瑞琪(凼凼)
+* 李亮(海苍)
 * @chinsyo
 * @L1MeN9Yu
 * @flx413
 * @robinhzp
 * @contrun
+* @eltociear
+* @happyomg
+* @driventokill
+* @chenzhanfeng
+* @CherylQL
+* @wangweiwei1188
+* @yunwei37
+* @keengo99
+* @ruanshanshan
 
 名单持续更新，欢迎大家参与贡献！

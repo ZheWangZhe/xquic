@@ -94,7 +94,6 @@ xqc_wakeup_pq_destroy(xqc_wakeup_pq_t *pq)
 static inline void
 xqc_wakeup_pq_element_swap(xqc_wakeup_pq_t *pq, size_t i, size_t j)
 {
-
 #if !defined(XQC_SYS_WINDOWS) || defined(XQC_ON_MINGW)
     char buf[pq->element_size];
 #else

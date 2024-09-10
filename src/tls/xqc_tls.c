@@ -9,6 +9,7 @@
 #include "xqc_crypto.h"
 #include "src/common/xqc_common.h"
 #include <openssl/rand.h>
+#include <openssl/hmac.h>
 
 
 typedef enum xqc_tls_flag_e {
@@ -168,7 +169,7 @@ xqc_tls_set_alpn(SSL *ssl, const char *alpn)
      * the rest bytes, set the last byte with '\0'
      */
     p_alpn[0] = alpn_len;
-    strncpy(&p_alpn[1], alpn, protos_len);
+    memcpy(&p_alpn[1], alpn, alpn_len);
     p_alpn[protos_len] = '\0';
     SSL_set_alpn_protos(ssl, p_alpn, protos_len);
 
@@ -310,6 +311,21 @@ end:
     return ret;
 }
 
+xqc_int_t 
+xqc_tls_update_tp(xqc_tls_t *tls, uint8_t *tp_buf, size_t tp_len)
+{
+    xqc_int_t ret = XQC_OK;
+    int ssl_ret;
+    /* set local transport parameter */
+    ssl_ret = SSL_set_quic_transport_params(tls->ssl, tp_buf, tp_len);
+    if (ssl_ret != XQC_SSL_SUCCESS) {
+        xqc_log(tls->log, XQC_LOG_ERROR, "|set transport params error|%s|",
+                ERR_error_string(ERR_get_error(), NULL));
+        ret = -XQC_TLS_INTERNAL;
+    }
+    return ret;
+}
+
 
 xqc_tls_t *
 xqc_tls_create(xqc_tls_ctx_t *ctx, xqc_tls_config_t *cfg, xqc_log_t *log, void *user_data)
@@ -375,7 +391,9 @@ xqc_tls_process_trans_param(xqc_tls_t *tls)
 xqc_int_t
 xqc_tls_do_handshake(xqc_tls_t *tls)
 {
-    xqc_ssl_handshake_res_t res = xqc_ssl_do_handshake(tls->ssl);
+    xqc_ssl_handshake_res_t res = xqc_ssl_do_handshake(tls->ssl, tls->user_data, tls->log);
+    xqc_log(tls->log, XQC_LOG_DEBUG, "|TLS handshake|ret:%d|", res);
+
     if (res == XQC_SSL_HSK_RES_FAIL) {
         xqc_log(tls->log, XQC_LOG_ERROR, "|TLS handshake error:%s|",
                 ERR_error_string(ERR_get_error(), NULL));
@@ -539,6 +557,8 @@ xqc_tls_process_crypto_data(xqc_tls_t *tls, xqc_encrypt_level_t level,
     int ret;
     int err;
 
+    xqc_log(tls->log, XQC_LOG_DEBUG, "|xqc_tls_process_crypto_data|level:%d|%zu|", level, data_len);
+
     if (SSL_provide_quic_data(ssl, (enum ssl_encryption_level_t)level, crypto_data, data_len)
         != XQC_SSL_SUCCESS)
     {
@@ -594,7 +614,8 @@ xqc_tls_encrypt_header(xqc_tls_t *tls, xqc_encrypt_level_t level,
 
 xqc_int_t
 xqc_tls_encrypt_payload(xqc_tls_t *tls, xqc_encrypt_level_t level,
-    uint64_t pktno, uint8_t *header, size_t header_len, uint8_t *payload, size_t payload_len,
+    uint64_t pktno, uint32_t path_id,
+    uint8_t *header, size_t header_len, uint8_t *payload, size_t payload_len,
     uint8_t *dst, size_t dst_cap, size_t *dst_len)
 {
     xqc_crypto_t *crypto = tls->crypto[level];
@@ -612,8 +633,9 @@ xqc_tls_encrypt_payload(xqc_tls_t *tls, xqc_encrypt_level_t level,
         }
     }
 
-    return xqc_crypto_encrypt_payload(crypto, pktno, key_phase, header, header_len,
-                                      payload, payload_len, dst, dst_cap, dst_len);
+    return xqc_crypto_encrypt_payload(crypto, pktno, key_phase, path_id,
+                                      header, header_len, payload, payload_len,
+                                      dst, dst_cap, dst_len);
 }
 
 xqc_int_t
@@ -632,7 +654,8 @@ xqc_tls_decrypt_header(xqc_tls_t *tls, xqc_encrypt_level_t level,
 
 xqc_int_t
 xqc_tls_decrypt_payload(xqc_tls_t *tls, xqc_encrypt_level_t level,
-    uint64_t pktno, uint8_t *header, size_t header_len, uint8_t *payload, size_t payload_len,
+    uint64_t pktno, uint32_t path_id,
+    uint8_t *header, size_t header_len, uint8_t *payload, size_t payload_len,
     uint8_t *dst, size_t dst_cap, size_t *dst_len)
 {
     xqc_crypto_t *crypto = tls->crypto[level];
@@ -650,8 +673,9 @@ xqc_tls_decrypt_payload(xqc_tls_t *tls, xqc_encrypt_level_t level,
         }
     }
 
-    return xqc_crypto_decrypt_payload(crypto, pktno, key_phase, header, header_len,
-                                      payload, payload_len, dst, dst_cap, dst_len);
+    return xqc_crypto_decrypt_payload(crypto, pktno, key_phase, path_id,
+                                      header, header_len, payload, payload_len,
+                                      dst, dst_cap, dst_len);
 }
 
 
@@ -825,7 +849,8 @@ xqc_ssl_alpn_select_cb(SSL *ssl, const unsigned char **out, unsigned char *outle
     if (SSL_select_next_proto((unsigned char **)out, outlen, alpn_list, alpn_list_len, in, inlen)
         != OPENSSL_NPN_NEGOTIATED)
     {
-        xqc_log(tls->log, XQC_LOG_ERROR, "|select proto error|");
+        xqc_log(tls->log, XQC_LOG_ERROR, "|select proto error|in:%*s",
+                (size_t)inlen, in);
         return SSL_TLSEXT_ERR_NOACK;
     }
 
@@ -836,8 +861,8 @@ xqc_ssl_alpn_select_cb(SSL *ssl, const unsigned char **out, unsigned char *outle
     if (XQC_OK != ret) {
         return SSL_TLSEXT_ERR_ALERT_FATAL;
     }
-
-    xqc_log(tls->log, XQC_LOG_DEBUG, "|select alpn|%*s|", alpn_len, alpn);
+    xqc_log_event(tls->log, TRA_ALPN_INFORMATION, alpn_list, alpn_list_len, in,
+        inlen, alpn, alpn_len);
     return SSL_TLSEXT_ERR_OK;
 }
 
@@ -1022,6 +1047,95 @@ xqc_ssl_cert_verify_cb(int ok, X509_STORE_CTX *store_ctx)
 end:
     xqc_ssl_free_certs_array(certs_array, certs_array_len);
     return verify_res;
+}
+
+
+int
+xqc_ssl_cert_cb(SSL *ssl, void *arg)
+{
+    int                 ssl_ret     = XQC_SSL_SUCCESS;
+    xqc_int_t           ret         = XQC_OK;
+    const char         *hostname    = NULL;
+    STACK_OF(X509)     *chain       = NULL;
+    X509               *crt         = NULL;
+    EVP_PKEY           *key         = NULL;
+    xqc_tls_t          *tls         = (xqc_tls_t *)SSL_get_app_data(ssl);
+
+    if (tls == NULL) {
+        return XQC_SSL_FAIL;
+    }
+
+    hostname = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+    if (NULL == hostname) {
+        xqc_log(tls->log, XQC_LOG_ERROR, "|hostname is NULL");
+        return XQC_SSL_FAIL;
+    }
+
+    /* callback to upper layer to get SSL_CTX */
+    if (tls->cbs->cert_cb) {
+        /* if error returned by upper layer, use default ssl_ctx */
+        ret = tls->cbs->cert_cb(hostname, (void **)&chain, (void **)&crt,
+                                (void **)&key, tls->user_data);
+        if (XQC_OK != ret) {
+            xqc_log(tls->log, XQC_LOG_INFO, "|cert cb error|sni:%s|ret:%d",
+                    hostname, ret);
+            goto end;
+        }
+
+        /* if no cert or key returned, use default ssl_ctx */
+        if (NULL == crt || NULL == key) {
+            xqc_log(tls->log, XQC_LOG_INFO, "|cert chain or key empty|sni:%s",
+                    hostname);
+            goto end;
+        }
+
+        ssl_ret = SSL_set1_chain(ssl, chain);
+        if (ssl_ret != XQC_SSL_SUCCESS) {
+            xqc_log(tls->log, XQC_LOG_ERROR,
+                    "|set chain error|sni:%s|ret:%d", hostname, ssl_ret);
+            return XQC_SSL_FAIL;
+        }
+
+        ssl_ret = SSL_use_certificate(ssl, crt);
+        if (ssl_ret != XQC_SSL_SUCCESS) {
+            xqc_log(tls->log, XQC_LOG_ERROR,
+                    "|set certificate error|sni:%s|ret:%d", hostname, ssl_ret);
+            return XQC_SSL_FAIL;
+        }
+
+        ssl_ret = SSL_use_PrivateKey(ssl, key);
+        if (ssl_ret != XQC_SSL_SUCCESS) {
+            xqc_log(tls->log, XQC_LOG_ERROR,
+                    "|set key error|sni:%s|ret:%d", hostname, ssl_ret);
+            return XQC_SSL_FAIL;
+        }
+
+    }
+
+end:
+    return XQC_SSL_SUCCESS;
+}
+
+void
+xqc_tls_get_selected_alpn(xqc_tls_t *tls, const char **out_alpn,
+                          size_t *out_len)
+{
+    if (NULL == tls) {
+        return;
+    }
+
+    SSL_get0_alpn_selected(tls->ssl, (const uint8_t **)out_alpn,
+                           (unsigned *)out_len);
+}
+
+void *
+xqc_tls_get_ssl(xqc_tls_t *tls)
+{
+    if (!tls) {
+        return NULL;
+    }
+
+    return tls->ssl;
 }
 
 

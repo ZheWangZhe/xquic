@@ -54,6 +54,13 @@ typedef struct xqc_encoder_s {
     double                  entry_limit;
     size_t                  entry_size_limit;
 
+#ifdef XQC_COMPAT_DUPLICATE
+    /**
+     * @deprecated shall be deleted in the future
+     */
+    xqc_bool_t              compat_dup;
+#endif
+
 } xqc_encoder_s;
 
 
@@ -243,7 +250,7 @@ xqc_encoder_create(xqc_log_t *log)
     }
 
     /* init dynamic table */
-    enc->dtable = xqc_dtable_create(XQC_QPACK_DEFAULT_HASH_TABLE_SIZE, log);
+    enc->dtable = xqc_dtable_create(XQC_QPACK_DEFAULT_HASH_TABLE_SIZE, log, 1);
     if (enc->dtable == NULL) {
         xqc_free(enc);
         return NULL;
@@ -258,6 +265,10 @@ xqc_encoder_create(xqc_log_t *log)
     enc->max_blocked_stream = 0;
     enc->blocked_stream_count = 0;
     enc->krc = 0;
+
+#ifdef XQC_COMPAT_DUPLICATE
+    enc->compat_dup = XQC_FALSE;
+#endif
 
     xqc_encoder_set_insert_limit(enc, xqc_encoder_insert_limit_name, 
                                  xqc_encoder_insert_limit_entry);
@@ -300,7 +311,7 @@ xqc_encoder_destroy(xqc_encoder_t *enc)
 }
 
 
-void
+xqc_int_t
 xqc_encoder_lookup_nv(xqc_encoder_t *enc, xqc_hdr_enc_rule_t *info)
 {
     xqc_http_header_t *hdr = info->hdr;
@@ -323,6 +334,9 @@ xqc_encoder_lookup_nv(xqc_encoder_t *enc, xqc_hdr_enc_rule_t *info)
     xqc_nv_ref_type_t dtable_ref = XQC_NV_REF_NONE;
     if (stable_ref != XQC_NV_REF_NAME_AND_VALUE) {
         dtable_ref = xqc_dtable_lookup(enc->dtable, name, nlen, value, vlen, &dtable_idx);
+        if (dtable_ref == XQC_NV_ERROR) {
+            return XQC_ERROR;
+        }
     }
 
     if (stable_ref != XQC_NV_REF_NONE || dtable_ref != XQC_NV_REF_NONE) {
@@ -338,6 +352,7 @@ xqc_encoder_lookup_nv(xqc_encoder_t *enc, xqc_hdr_enc_rule_t *info)
             info->index = dtable_idx;
         }
     }
+    return XQC_OK;
 }
 
 
@@ -613,7 +628,18 @@ xqc_encoder_try_duplicate(xqc_encoder_t *enc, xqc_hdr_enc_rule_t *info, xqc_var_
 
     if (draining == XQC_TRUE) {
         uint64_t dup_idx;
-        ret = xqc_dtable_duplicate(enc->dtable, info->index, &dup_idx);
+
+#ifdef XQC_COMPAT_DUPLICATE
+        if (enc->compat_dup) {
+            ret = xqc_dtable_duplicate_compat(enc->dtable, info->index, &dup_idx);
+
+        } else {
+#endif
+            ret = xqc_dtable_duplicate(enc->dtable, info->index, &dup_idx);
+#ifdef XQC_COMPAT_DUPLICATE
+        }
+#endif
+
         if (ret != XQC_OK) {
             xqc_log(enc->log, XQC_LOG_DEBUG, "|duplicate entry fail|ret:%d|", ret);
             return ret;
@@ -667,7 +693,11 @@ xqc_encoder_prepare(xqc_encoder_t *enc, xqc_http_headers_t *hdrs, xqc_field_sect
         }
 
         /* lookup nv from static table and dynamic table */
-        xqc_encoder_lookup_nv(enc, info);
+        ret = xqc_encoder_lookup_nv(enc, info);
+        if (ret != XQC_OK) {
+            xqc_log(enc->log, XQC_LOG_ERROR, "|lookup failed|");
+            return ret;
+        }
 
         /* decide dynamic table strategy, including never flag and insertion */
         xqc_encoder_check_index_mode(enc, info, limited);
@@ -1180,3 +1210,12 @@ xqc_log_QPACK_HEADERS_ENCODED_callback(xqc_log_t *log, const char *func, ...)
     }
     va_end(args);
 }
+
+#ifdef XQC_COMPAT_DUPLICATE
+void
+xqc_encoder_compat_dup(xqc_encoder_t *enc, xqc_bool_t compat)
+{
+    enc->compat_dup = compat;
+    xqc_log(enc->log, XQC_LOG_DEBUG, "|qpack_enc_compat_dup:%d|", compat);
+}
+#endif

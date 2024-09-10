@@ -6,7 +6,7 @@
 #define _XQC_QPACK_DEFS_H_
 
 #include <xquic/xqc_http3.h>
-#include "src/http3/xqc_var_buf.h"
+#include "src/common/utils/var_buf/xqc_var_buf.h"
 #include "src/http3/xqc_h3_defs.h"
 
 #define XQC_QPACK_MAX_TABLE_CAPACITY            (16 * 1024)
@@ -56,6 +56,7 @@ typedef struct xqc_nv_t {
 
 /* lookup reference result */
 typedef enum xqc_nv_ref_type_s {
+    XQC_NV_ERROR = -1,          /* error during lookup */
     XQC_NV_REF_NONE = 0,        /* none is matched */
     XQC_NV_REF_NAME,            /* only name is matched */
     XQC_NV_REF_NAME_AND_VALUE,  /* both name and value are matched */

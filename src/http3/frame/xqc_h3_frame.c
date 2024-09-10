@@ -45,6 +45,8 @@ xqc_h3_frm_reset_pctx(xqc_h3_frame_pctx_t *pctx)
         break;
     case XQC_H3_FRM_MAX_PUSH_ID:
         break;
+    case XQC_H3_EXT_FRM_BIDI_STREAM_TYPE:
+        break;
     case XQC_H3_FRM_UNKNOWN:
         break;
     }
@@ -71,7 +73,11 @@ xqc_h3_frm_parse_settings(const unsigned char *p, size_t sz, xqc_h3_frame_t *fra
     *fin = XQC_FALSE;
     xqc_h3_frame_settings_t *settings = &frame->frame_payload.settings;
     if (settings->setting == NULL) {
-        settings->setting = xqc_var_buf_create(frame->len);
+        if (frame->len > XQC_VAR_BUF_INIT_SIZE) {
+            settings->setting = xqc_var_buf_create(XQC_VAR_BUF_INIT_SIZE);
+        } else {
+            settings->setting = xqc_var_buf_create(frame->len);
+        }
         if (settings->setting == NULL) {
             return -XQC_H3_EMALLOC;
         }
@@ -102,13 +108,21 @@ xqc_h3_frm_parse_push_promise(const unsigned char *p, size_t sz, xqc_h3_frame_t 
         }
     }
     if (push_promise->count == 1 && sz > 0) {
+        if (frame->len < xqc_vint_len_by_val(push_promise->push_id.vi)) {
+            return -XQC_EVINTREAD;
+        }
+        ssize_t payload_len = frame->len - xqc_vint_len_by_val(push_promise->push_id.vi);
         if (push_promise->encoded_field_section == NULL) {
-            push_promise->encoded_field_section = xqc_var_buf_create(frame->len - xqc_vint_len_by_val(push_promise->push_id.vi));
+            if (payload_len > XQC_VAR_BUF_INIT_SIZE) {
+                push_promise->encoded_field_section = xqc_var_buf_create(XQC_VAR_BUF_INIT_SIZE);
+            } else {
+                push_promise->encoded_field_section = xqc_var_buf_create(payload_len);
+            }
             if (push_promise->encoded_field_section == NULL) {
                 return -XQC_H3_EMALLOC;
             }
         }
-        ssize_t len = xqc_min(sz, frame->len - xqc_vint_len_by_val(push_promise->push_id.vi) - push_promise->encoded_field_section->data_len);
+        ssize_t len = xqc_min(sz, payload_len - push_promise->encoded_field_section->data_len);
         xqc_int_t ret = xqc_var_buf_save_data(push_promise->encoded_field_section, pos, len);
         if (ret != XQC_OK) {
             return ret;
@@ -136,6 +150,16 @@ xqc_h3_frm_parse_max_push_id(const unsigned char *p, size_t sz, xqc_h3_frame_t *
     *fin = XQC_FALSE;
     xqc_h3_frame_max_push_id_t *max_push_id = &frame->frame_payload.max_push_id;
     XQC_H3_DECODE_DISCRETE_VINT_VALUE(pos, sz, max_push_id->push_id, fin);
+    return pos - p;
+}
+
+ssize_t
+xqc_h3_ext_frm_parse_bidi_stream_type(const unsigned char *p, size_t sz, xqc_h3_frame_t *frame, xqc_bool_t *fin)
+{
+    const unsigned char *pos = p;
+    *fin = XQC_FALSE;
+    xqc_h3_ext_frame_bidi_stream_type_t *stream_type = &frame->frame_payload.stream_type;
+    XQC_H3_DECODE_DISCRETE_VINT_VALUE(pos, sz, stream_type->stream_type, fin);
     return pos - p;
 }
 
@@ -175,7 +199,7 @@ xqc_h3_frm_parse(const unsigned char *p, size_t sz, xqc_h3_frame_pctx_t *pctx)
         XQC_H3_DECODE_DISCRETE_VINT_VALUE(pos, sz, pctx->pctx, &fin);
         if (fin) {
             pctx->frame.type = pctx->pctx.vi;
-            xqc_h3_vint_pctx_clear(&pctx->pctx);
+            xqc_discrete_int_pctx_clear(&pctx->pctx);
             pctx->state = XQC_H3_FRM_STATE_LEN;
             fin = 0;
         }
@@ -190,7 +214,7 @@ xqc_h3_frm_parse(const unsigned char *p, size_t sz, xqc_h3_frame_pctx_t *pctx)
         if (fin) {
             pctx->frame.len = pctx->pctx.vi;
             pctx->frame.consumed_len = 0;
-            xqc_h3_vint_pctx_clear(&pctx->pctx);
+            xqc_discrete_int_pctx_clear(&pctx->pctx);
             pctx->state = XQC_H3_FRM_STATE_PAYLOAD;
             memset(&pctx->frame.frame_payload, 0, sizeof(xqc_h3_frame_pl_t));
             fin = 0;
@@ -229,6 +253,10 @@ xqc_h3_frm_parse(const unsigned char *p, size_t sz, xqc_h3_frame_pctx_t *pctx)
             XQC_H3_DECODE_FRM(xqc_h3_frm_parse_max_push_id, pos, sz, pctx->frame, &fin);
             break;
         }
+        case XQC_H3_EXT_FRM_BIDI_STREAM_TYPE: {
+            XQC_H3_DECODE_FRM(xqc_h3_ext_frm_parse_bidi_stream_type, pos, sz, pctx->frame, &fin);
+            break;
+        }
         default: {
             XQC_H3_DECODE_FRM(xqc_h3_frm_parse_reserved, pos, sz, pctx->frame, &fin);
             break;
@@ -249,9 +277,9 @@ xqc_h3_frm_parse_setting(xqc_var_buf_t *data, void *user_data)
     while (data->consumed_len < data->data_len)
     {
         xqc_bool_t fin;
-        xqc_discrete_vint_pctx_t identifier, value;
-        memset(&identifier, 0, sizeof(xqc_discrete_vint_pctx_t));
-        memset(&value, 0, sizeof(xqc_discrete_vint_pctx_t));
+        xqc_discrete_int_pctx_t identifier, value;
+        memset(&identifier, 0, sizeof(xqc_discrete_int_pctx_t));
+        memset(&value, 0, sizeof(xqc_discrete_int_pctx_t));
 
         ssize_t read = xqc_discrete_vint_parse(data->data + data->consumed_len, 
                                                data->data_len - data->consumed_len,
@@ -376,7 +404,7 @@ xqc_h3_frm_write_settings(xqc_list_head_t *send_buf, xqc_h3_conn_settings_t *set
     ++count;
 
     settings[count].identifier.vi = XQC_H3_SETTINGS_QPACK_MAX_TABLE_CAPACITY;
-    settings[count].value.vi = setting->qpack_max_table_capacity;
+    settings[count].value.vi = setting->qpack_dec_max_table_capacity;
     len += xqc_put_varint_len(settings[count].identifier.vi);
     len += xqc_put_varint_len(settings[count].value.vi);
     ++count;
@@ -489,6 +517,34 @@ xqc_h3_frm_write_max_push_id(xqc_list_head_t *send_buf, uint64_t push_id, uint8_
     pos = xqc_put_varint(pos, XQC_H3_FRM_MAX_PUSH_ID);
     pos = xqc_put_varint(pos, len);
     pos = xqc_put_varint(pos, push_id);
+    buf->data_len = pos - buf->data;
+    buf->fin_flag = fin;
+
+    xqc_int_t ret = xqc_list_buf_to_tail(send_buf, buf);
+    if (ret != XQC_OK) {
+        xqc_var_buf_free(buf);
+        return ret;
+    }
+
+    return XQC_OK;
+}
+
+xqc_int_t 
+xqc_h3_ext_frm_write_bidi_stream_type(xqc_list_head_t *send_buf, 
+    uint64_t stream_type, uint8_t fin)
+{
+    size_t len = xqc_put_varint_len(stream_type);
+    xqc_var_buf_t *buf = xqc_var_buf_create(xqc_put_varint_len(XQC_H3_EXT_FRM_BIDI_STREAM_TYPE)
+                                            + xqc_put_varint_len(len)
+                                            + len);
+    if (buf == NULL) {
+        return -XQC_EMALLOC;
+    }
+
+    unsigned char *pos = buf->data;
+    pos = xqc_put_varint(pos, XQC_H3_EXT_FRM_BIDI_STREAM_TYPE);
+    pos = xqc_put_varint(pos, len);
+    pos = xqc_put_varint(pos, stream_type);
     buf->data_len = pos - buf->data;
     buf->fin_flag = fin;
 

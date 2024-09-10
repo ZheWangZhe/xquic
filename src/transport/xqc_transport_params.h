@@ -24,6 +24,7 @@
 #define XQC_MAX_TRANSPORT_PARAM_BUF_LEN         512
 
 
+
 /**
  * @brief transport parameter type
  */
@@ -59,12 +60,44 @@ typedef enum {
     XQC_TRANSPORT_PARAM_INITIAL_SOURCE_CONNECTION_ID        = 0x000f,
     XQC_TRANSPORT_PARAM_RETRY_SOURCE_CONNECTION_ID          = 0x0010,
 
+    XQC_TRANSPORT_PARAM_ENABLE_MULTIPATH_PARSER             = 0x0011,
+    XQC_TRANSPORT_PARAM_MAX_DATAGRAM_FRAME_SIZE_PARSER      = 0x0012,
+    
+    /* whether enable datagram reduncy */
+    XQC_TRANSPORT_PARAM_CLOSE_DGRAM_REDUNDANCY             = 0x0013,
+#ifdef XQC_ENABLE_FEC
+    /* fec attributes' parser */
+    XQC_TRANSPORT_PARAM_FEC_VERSION_PARSER                  = 0x0014,
+    XQC_TRANSPORT_PARAM_FEC_ENCODER_SCHEMES_PARSER          = 0x0015,
+    XQC_TRANSPORT_PARAM_FEC_DECODER_SCHEMES_PARSER          = 0x0016,
+    XQC_TRANSPORT_PARAM_FEC_MAX_SYMBOL_SIZE_PARSER          = 0x0017,
+    XQC_TRANSPORT_PARAM_FEC_MAX_SYMBOL_NUM_PARSER           = 0x0018,
+#endif
     /* upper limit of params defined in [Transport] */
     XQC_TRANSPORT_PARAM_PROTOCOL_MAX,
+
+
+    /* max datagram frame size */
+    XQC_TRANSPORT_PARAM_MAX_DATAGRAM_FRAME_SIZE             = 0x0020,
 
     /* do no cryption on 0-RTT and 1-RTT packets */
     XQC_TRANSPORT_PARAM_NO_CRYPTO                           = 0x1000,
 
+    /* multipath quic attributes */
+    XQC_TRANSPORT_PARAM_ENABLE_MULTIPATH_04                 = 0x0f739bbc1b666d04,
+    XQC_TRANSPORT_PARAM_ENABLE_MULTIPATH_05                 = 0x0f739bbc1b666d05,
+    XQC_TRANSPORT_PARAM_ENABLE_MULTIPATH_06                 = 0x0f739bbc1b666d06,
+
+    /* google connection options */
+    XQC_TRANSPORT_PARAM_GOOGLE_CO                           = 0x3128,
+#ifdef XQC_ENABLE_FEC
+    /* fec attributes */
+    XQC_TRANSPORT_PARAM_FEC_VERSION                         = 0xfec001,
+    XQC_TRANSPORT_PARAM_FEC_ENCODER_SCHEMES                 = 0xfece01,
+    XQC_TRANSPORT_PARAM_FEC_DECODER_SCHEMES                 = 0xfecd02,
+    XQC_TRANSPORT_PARAM_FEC_MAX_SYMBOL_SIZE                 = 0xfecb01,
+    XQC_TRANSPORT_PARAM_FEC_MAX_SYMBOL_NUM                  = 0xfecb02,
+#endif
     /* upper limit of params defined by xquic */
     XQC_TRANSPORT_PARAM_UNKNOWN,
 } xqc_transport_param_id_t;
@@ -109,6 +142,13 @@ typedef struct {
     xqc_cid_t               retry_source_connection_id;
     uint8_t                 retry_source_connection_id_present;
 
+    /* 
+    * support for datagram (RFC 9221).
+    * default: 0, not supported
+    * special: 65535, accept datagram frames with any length in a QUIC packet
+    */
+    uint64_t                max_datagram_frame_size;
+
     /**
      * no_crypto is a self-defined experimental transport parameter by xquic, xquic will do no
      * encryption on 0-RTT or 1-RTT packets if no_crypto is set to be 1.
@@ -118,6 +158,34 @@ typedef struct {
      */
     uint64_t                no_crypto;
 
+    /**
+     * enable_multipath is a self-defined experimental transport parameter by xquic, which will
+     * enable multipath quic if enable_multipath is set to be 1.
+
+     * https://datatracker.ietf.org/doc/html/draft-ietf-quic-multipath-05#section-3
+     * enable_multipath is designed to be effective only on current connection and do not apply to
+     * future connections, storing this parameter and recover on future connections is prohibited.
+     * NOTICE: enable_multipath MIGHT be modified or removed as it is not an official parameter
+     */
+    uint64_t                enable_multipath;
+
+
+    xqc_multipath_version_t   multipath_version;
+
+    uint32_t                  conn_options[XQC_CO_MAX_NUM];
+    uint8_t                   conn_option_num;
+
+    xqc_fec_version_t       fec_version;
+    uint64_t                enable_encode_fec;
+    uint64_t                enable_decode_fec;
+    uint64_t                fec_max_symbol_size;
+    uint64_t                fec_max_symbols_num;
+    xqc_fec_schemes_e       fec_encoder_schemes[XQC_FEC_MAX_SCHEME_NUM];
+    xqc_fec_schemes_e       fec_decoder_schemes[XQC_FEC_MAX_SCHEME_NUM];
+    xqc_int_t               fec_encoder_schemes_num;
+    xqc_int_t               fec_decoder_schemes_num;
+
+    xqc_dgram_red_setting_e close_dgram_redundancy;
 } xqc_transport_params_t;
 
 
@@ -152,6 +220,8 @@ xqc_int_t xqc_read_transport_params(char *tp_data, size_t tp_data_len,
 
 ssize_t xqc_write_transport_params(char *tp_buf, size_t cap,
     const xqc_transport_params_t *params);
+
+void xqc_init_transport_params(xqc_transport_params_t *params);
 
 
 #endif /* XQC_TRANSPORT_PARAMS_H_ */

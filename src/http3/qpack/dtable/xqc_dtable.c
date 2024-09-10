@@ -146,7 +146,7 @@ xqc_dtable_compare_nv(void *data, void *v1, size_t len1, void *v2, size_t len2,
 
 
 xqc_dtable_t *
-xqc_dtable_create(size_t htable_buckets, xqc_log_t *log)
+xqc_dtable_create(size_t htable_buckets, xqc_log_t *log, size_t need_hash)
 {
     if (htable_buckets == 0) {
         return NULL;
@@ -159,13 +159,15 @@ xqc_dtable_create(size_t htable_buckets, xqc_log_t *log)
     }
     dt->log = log;
 
-    /* create 2d hash table */
-    dt->ht2d = xqc_2d_hash_table_create(htable_buckets, xqc_dtable_compare_entry,
-                                        xqc_dtable_compare_nv, dt);
-    if (dt->ht2d == NULL) {
-        xqc_log(log, XQC_LOG_ERROR, "|create 2d hash table error|");
-        xqc_free(dt);
-        return NULL;
+    /* encoder will create 2d hash table */
+    if (need_hash) {
+        dt->ht2d = xqc_2d_hash_table_create(htable_buckets, xqc_dtable_compare_entry,
+                                            xqc_dtable_compare_nv, dt);
+        if (dt->ht2d == NULL) {
+            xqc_log(log, XQC_LOG_ERROR, "|create 2d hash table error|");
+            xqc_free(dt);
+            return NULL;
+        }
     }
 
     /* make the capacity of ring memory same with dtable, initialized to be 0 */
@@ -295,10 +297,12 @@ xqc_dtable_pop_entry(xqc_dtable_t *dt)
     }
 
     /* remove from 2d hash table */
-    ret = xqc_2d_hash_table_remove(dt->ht2d, entry->nv.nidx, entry->nv.vidx, entry);
-    if (ret != XQC_OK) {
-        xqc_log(dt->log, XQC_LOG_ERROR, "|remove from 2d hash error|ret:%d|", ret);
-        return ret;
+    if (dt->ht2d) {
+        ret = xqc_2d_hash_table_remove(dt->ht2d, entry->nv.nidx, entry->nv.vidx, entry);
+        if (ret != XQC_OK) {
+            xqc_log(dt->log, XQC_LOG_ERROR, "|remove from 2d hash error|ret:%d|", ret);
+            return ret;
+        }
     }
 
     /* pop entry from ring array */
@@ -429,12 +433,14 @@ xqc_dtable_add(xqc_dtable_t *dt, unsigned char *name, uint64_t nlen, unsigned ch
     }
 
     /* insert into 2d hash table.  */
-    uint64_t nhash = xqc_hash_string(name, nlen);
+    uint64_t nhash = xqc_murmur_hash2(name, nlen);
     uint64_t vhash = xqc_dtable_make_value_hash(value, vlen);
-    ret = xqc_2d_hash_table_add(dt->ht2d, nhash, vhash, entry);
-    if (ret != XQC_OK) {
-        xqc_log(dt->log, XQC_LOG_ERROR, "|add entry to 2dht error|ret:%d|", ret);
-        return ret;
+    if (dt->ht2d) {
+        ret = xqc_2d_hash_table_add(dt->ht2d, nhash, vhash, entry);
+        if (ret != XQC_OK) {
+            xqc_log(dt->log, XQC_LOG_ERROR, "|add entry to 2dht error|ret:%d|", ret);
+            return ret;
+        }
     }
 
     entry->nhash = nhash;
@@ -530,11 +536,14 @@ xqc_dtable_lookup(xqc_dtable_t *dt, unsigned char *name, size_t nlen,
         return XQC_NV_REF_NONE;
     }
 
-    uint64_t nhash = xqc_hash_string(name, nlen);
+    uint64_t nhash = xqc_murmur_hash2(name, nlen);
     uint64_t vhash = xqc_dtable_make_value_hash(value, vlen);
 
     /* lookup name-value from 2d hash table */
     xqc_dtable_entry_t *entry = NULL;
+    if (dt->ht2d == NULL) {
+        return XQC_NV_ERROR;
+    }
     xqc_nv_ref_type_t ret = (xqc_nv_ref_type_t)xqc_2d_hash_lookup(dt->ht2d, nhash, name,
         nlen, vhash, value, vlen, (void **)&entry);
     if (ret != XQC_NV_REF_NONE) {
@@ -609,8 +618,10 @@ xqc_dtable_set_capacity(xqc_dtable_t *dt, uint64_t capacity)
 }
 
 
+#ifdef XQC_COMPAT_DUPLICATE
+
 xqc_int_t
-xqc_dtable_prepare_dup(xqc_dtable_t *dt, uint64_t idx, size_t space)
+xqc_dtable_prepare_dup_compat(xqc_dtable_t *dt, uint64_t idx, size_t space)
 {
     xqc_int_t ret = XQC_OK; /* for make space */
     xqc_int_t res = XQC_OK; /* for set min_ref */
@@ -646,7 +657,7 @@ xqc_dtable_prepare_dup(xqc_dtable_t *dt, uint64_t idx, size_t space)
 
 
 xqc_int_t
-xqc_dtable_duplicate(xqc_dtable_t *dt, uint64_t idx, uint64_t *new_idx)
+xqc_dtable_duplicate_compat(xqc_dtable_t *dt, uint64_t idx, uint64_t *new_idx)
 {
     xqc_int_t ret = XQC_OK;
 
@@ -662,7 +673,7 @@ xqc_dtable_duplicate(xqc_dtable_t *dt, uint64_t idx, uint64_t *new_idx)
 
     /* check if there is enough space */
     size_t space = xqc_dtable_entry_size(entry->nv.nlen, entry->nv.vlen);
-    if (xqc_dtable_prepare_dup(dt, idx, space) != XQC_OK) {
+    if (xqc_dtable_prepare_dup_compat(dt, idx, space) != XQC_OK) {
         xqc_log(dt->log, XQC_LOG_DEBUG, "|prepare for duplicate failed|");
         return -XQC_ELIMIT;
     }
@@ -713,6 +724,74 @@ xqc_dtable_duplicate(xqc_dtable_t *dt, uint64_t idx, uint64_t *new_idx)
 
     return XQC_OK;
 }
+
+#endif
+
+
+xqc_int_t
+xqc_dtable_prepare_dup(xqc_dtable_t *dt, size_t space)
+{
+    xqc_int_t ret = XQC_OK; /* for make space */
+
+    /* make space for new entry, entries that are not referred will be deleted */
+    ret = xqc_dtable_make_space(dt, space);
+    if (ret != XQC_OK) {
+        /* if make space fails, dtalbe shall recover its min_ref */
+        xqc_log(dt->log, XQC_LOG_DEBUG, "|unable to make space for duplicate|ret:%d|", ret);
+    }
+
+    return ret;
+}
+
+
+xqc_int_t
+xqc_dtable_duplicate(xqc_dtable_t *dt, uint64_t idx, uint64_t *new_idx)
+{
+    xqc_int_t       ret     = XQC_OK;
+    xqc_var_buf_t   name    = {0};
+    xqc_var_buf_t   value   = {0};
+    unsigned char  *nbuf    = NULL;
+    unsigned char  *vbuf    = NULL;
+
+    xqc_log(dt->log, XQC_LOG_DEBUG, "|dup|idx:%ui|min_ref:%ui|", idx, dt->min_ref);
+
+
+    /* get name-value of entry */
+    ret = xqc_dtable_get_nv(dt, idx, &name, &value);
+    if (ret != XQC_OK) {
+        xqc_log(dt->log, XQC_LOG_ERROR, "|can't get entry with idx|idx:%ui|first:%ui|end:%ui|",
+                idx, dt->first_idx, dt->insert_cnt);
+        ret = -XQC_QPACK_DYNAMIC_TABLE_VOID_ENTRY;
+        goto end;
+    }
+
+    /* check if there is enough space */
+    size_t space = xqc_dtable_entry_size(name.data_len, value.data_len);
+    if (xqc_dtable_prepare_dup(dt, space) != XQC_OK) {
+        xqc_log(dt->log, XQC_LOG_DEBUG, "|prepare for duplicate failed|");
+        ret = -XQC_ELIMIT;
+        goto end;
+    }
+
+    ret = xqc_dtable_add(dt, name.data, name.data_len, value.data, value.data_len, new_idx);
+    if (ret != XQC_OK) {
+        xqc_log(dt->log, XQC_LOG_ERROR, "|duplicate error|ret:%d|");
+    }
+
+end:
+    nbuf = xqc_var_buf_take_over(&name);
+    if (nbuf) {
+        xqc_free(nbuf);
+    }
+
+    vbuf = xqc_var_buf_take_over(&value);
+    if (vbuf) {
+        xqc_free(vbuf);
+    }
+
+    return ret;
+}
+
 
 
 uint64_t

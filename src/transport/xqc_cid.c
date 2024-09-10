@@ -63,13 +63,13 @@ xqc_cid_copy(xqc_cid_t *dst, xqc_cid_t *src)
     dst->cid_len = src->cid_len;
     xqc_memcpy(dst->cid_buf, src->cid_buf, dst->cid_len);
     dst->cid_seq_num = src->cid_seq_num;
+    xqc_memcpy(dst->sr_token, src->sr_token, XQC_STATELESS_RESET_TOKENLEN);
 }
 
 void
 xqc_cid_init_zero(xqc_cid_t *cid)
 {
     cid->cid_len = 0;
-    xqc_memzero(cid->cid_buf, XQC_MAX_CID_LEN);
     cid->cid_seq_num = 0;
 }
 
@@ -82,23 +82,30 @@ xqc_cid_set(xqc_cid_t *cid, const unsigned char *data, uint8_t len)
     }
 }
 
-static unsigned char g_scid_buf[XQC_MAX_CID_LEN * 2 + 1];
-static unsigned char g_dcid_buf[XQC_MAX_CID_LEN * 2 + 1];
+static unsigned char g_sr_token_buf[XQC_STATELESS_RESET_TOKENLEN * 2 + 1];
 
 unsigned char *
-xqc_dcid_str(const xqc_cid_t *dcid)
+xqc_dcid_str(xqc_engine_t *engine, const xqc_cid_t *dcid)
 {
-    xqc_hex_dump(g_dcid_buf, dcid->cid_buf, dcid->cid_len);
-    g_dcid_buf[dcid->cid_len * 2] = '\0';
-    return g_dcid_buf;
+    xqc_hex_dump(engine->dcid_buf, dcid->cid_buf, dcid->cid_len);
+    engine->dcid_buf[dcid->cid_len * 2] = '\0';
+    return engine->dcid_buf;
 }
 
 unsigned char *
-xqc_scid_str(const xqc_cid_t *scid)
+xqc_scid_str(xqc_engine_t *engine, const xqc_cid_t *scid)
 {
-    xqc_hex_dump(g_scid_buf, scid->cid_buf, scid->cid_len);
-    g_scid_buf[scid->cid_len * 2] = '\0';
-    return g_scid_buf;
+    xqc_hex_dump(engine->scid_buf, scid->cid_buf, scid->cid_len);
+    engine->scid_buf[scid->cid_len * 2] = '\0';
+    return engine->scid_buf;
+}
+
+unsigned char *
+xqc_sr_token_str(xqc_engine_t *engine, const char *sr_token)
+{
+    xqc_hex_dump(engine->sr_token_buf, sr_token, XQC_STATELESS_RESET_TOKENLEN);
+    engine->sr_token_buf[XQC_STATELESS_RESET_TOKENLEN * 2] = '\0';
+    return engine->sr_token_buf;
 }
 
 unsigned char *
@@ -157,6 +164,49 @@ xqc_destroy_cid_set(xqc_cid_set_t *cid_set)
 
     xqc_init_cid_set(cid_set);
 }
+
+uint64_t
+xqc_cid_set_cnt(xqc_cid_set_t *cid_set)
+{
+    return cid_set->unused_cnt + cid_set->used_cnt;
+}
+
+xqc_bool_t
+xqc_cid_set_validate_new_cid_limit(xqc_cid_set_t *cid_set,
+    uint64_t max_retire_prior_to, uint64_t *active_cid_limit)
+{
+    xqc_list_head_t *pos, *next;
+    xqc_cid_inner_t *cid = NULL;
+    uint64_t         retire_cnt = 0;
+
+    if (xqc_cid_set_cnt(cid_set) + 1 <= *active_cid_limit) {
+        return XQC_TRUE;
+    }
+
+    /* the new cid might exceed the active_cid_limit, but will not retire any
+       cid, shall not be inserted */
+    if (max_retire_prior_to == 0) {
+        return XQC_FALSE;
+    }
+
+    /* validate if cid cnt is legal after to be retired */
+    xqc_list_for_each_safe(pos, next, &cid_set->list_head) {
+        cid = xqc_list_entry(pos, xqc_cid_inner_t, list);
+        if (cid->cid.cid_seq_num < max_retire_prior_to) {
+            retire_cnt++;
+        }
+    }
+
+    if (xqc_cid_set_cnt(cid_set) + 1 - retire_cnt > *active_cid_limit) {
+        return XQC_FALSE;
+    }
+
+    /* allow the new connection id */
+    *active_cid_limit = xqc_cid_set_cnt(cid_set) + 1;
+
+    return XQC_TRUE;
+}
+
 
 xqc_int_t
 xqc_cid_set_insert_cid(xqc_cid_set_t *cid_set, xqc_cid_t *cid, xqc_cid_state_t state, uint64_t limit)
@@ -220,7 +270,7 @@ xqc_cid_set_delete_cid(xqc_cid_set_t *cid_set, xqc_cid_t *cid)
 }
 
 xqc_cid_inner_t *
-xqc_cid_in_cid_set(const xqc_cid_set_t *cid_set, const xqc_cid_t *cid)
+xqc_cid_in_cid_set(const xqc_cid_set_t *cid_set, xqc_cid_t *cid)
 {
     xqc_cid_inner_t *inner_cid = NULL;
     xqc_list_head_t *pos, *next;
@@ -228,6 +278,7 @@ xqc_cid_in_cid_set(const xqc_cid_set_t *cid_set, const xqc_cid_t *cid)
     xqc_list_for_each_safe(pos, next, &cid_set->list_head) {
         inner_cid = xqc_list_entry(pos, xqc_cid_inner_t, list);
         if (xqc_cid_is_equal(cid, &inner_cid->cid) == XQC_OK) {
+            cid->cid_seq_num = inner_cid->cid.cid_seq_num;
             return inner_cid;
         }
     }
@@ -330,4 +381,20 @@ xqc_get_inner_cid_by_seq(xqc_cid_set_t *cid_set, uint64_t seq_num)
     }
 
     return NULL;
+}
+
+xqc_bool_t
+xqc_validate_retire_cid_frame(xqc_cid_set_t *cid_set, xqc_cid_inner_t *cid)
+{
+    /* maybe retired already */
+    if (xqc_cid_in_cid_set(cid_set, &cid->cid) == NULL) {
+        return XQC_FALSE;
+    }
+
+    /* the cid is retired already */
+    if (cid->state >= XQC_CID_RETIRED) {
+        return XQC_FALSE;
+    }
+
+    return XQC_TRUE;
 }

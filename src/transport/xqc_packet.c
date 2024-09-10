@@ -192,9 +192,10 @@ xqc_packet_decrypt_single(xqc_connection_t *c, xqc_packet_in_t *packet_in)
             ret = -XQC_EIGNORE_PKT;
 
         } else {
-            xqc_log(c->log, XQC_LOG_WARN, "|decrypt data error, return|%d|pkt_type:%s|pkt_num:%ui|",
-                    ret, xqc_pkt_type_2_str(packet_in->pi_pkt.pkt_type), packet_in->pi_pkt.pkt_num);
-            ret = -XQC_EILLPKT;
+            xqc_log_event(c->log, TRA_PACKET_DROPPED, "decrypt data error", ret, 
+                xqc_pkt_type_2_str(packet_in->pi_pkt.pkt_type), packet_in->pi_pkt.pkt_num);
+            c->packet_dropped_count ++;
+            ret = -XQC_EDECRYPT;
             /* don't close connection, just drop the packet */
         }
         return ret;
@@ -232,17 +233,5 @@ xqc_packet_process_single(xqc_connection_t *c,
 }
 
 
-/* check if the packet has packet number */
-uint8_t
-xqc_has_packet_number(xqc_packet_t *pkt)
-{
-    /* VERSION_NEGOTIATION/RETRY packet don't have packet number */
-    if (XQC_UNLIKELY(XQC_PTYPE_VERSION_NEGOTIATION == pkt->pkt_type
-                     || XQC_PTYPE_RETRY == pkt->pkt_type))
-    {
-        return XQC_FALSE;
-    }
 
-    return XQC_TRUE;
-}
 

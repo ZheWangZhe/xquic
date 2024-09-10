@@ -61,15 +61,23 @@ void xqc_init_scid_set(xqc_scid_set_t *scid_set);
 void xqc_init_dcid_set(xqc_dcid_set_t *dcid_set);
 void xqc_destroy_cid_set(xqc_cid_set_t *cid_set);
 
+uint64_t xqc_cid_set_cnt(xqc_cid_set_t *cid_set);
+xqc_bool_t xqc_cid_set_validate_new_cid_limit(xqc_cid_set_t *cid_set,
+    uint64_t max_retire_prior_to, uint64_t *active_cid_limit);
+
 xqc_int_t xqc_cid_set_insert_cid(xqc_cid_set_t *cid_set, xqc_cid_t *cid, xqc_cid_state_t state, uint64_t limit);
 xqc_int_t xqc_cid_set_delete_cid(xqc_cid_set_t *cid_set, xqc_cid_t *cid);
 
 xqc_cid_t *xqc_get_cid_by_seq(xqc_cid_set_t *cid_set, uint64_t seq_num);
 xqc_cid_inner_t *xqc_get_inner_cid_by_seq(xqc_cid_set_t *cid_set, uint64_t seq_num);
-xqc_cid_inner_t *xqc_cid_in_cid_set(const xqc_cid_set_t *cid_set, const xqc_cid_t *cid);
+xqc_cid_inner_t *xqc_cid_in_cid_set(const xqc_cid_set_t *cid_set, xqc_cid_t *cid);
 
 xqc_int_t xqc_cid_switch_to_next_state(xqc_cid_set_t *cid_set, xqc_cid_inner_t *cid, xqc_cid_state_t state);
 xqc_int_t xqc_get_unused_cid(xqc_cid_set_t *cid_set, xqc_cid_t *cid);
+
+xqc_bool_t xqc_validate_retire_cid_frame(xqc_cid_set_t *cid_set, xqc_cid_inner_t *cid);
+
+unsigned char *xqc_sr_token_str(xqc_engine_t *engine, const char *sr_token);
 
 #endif /* _XQC_CID_H_INCLUDED_ */
 

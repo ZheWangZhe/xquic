@@ -11,6 +11,13 @@
 #include "src/transport/xqc_packet.h"
 
 #define XQC_UNDEFINE_STREAM_ID XQC_MAX_UINT64_VALUE
+#define XQC_STREAM_TRANSPORT_STATE_SZ 128
+
+#define XQC_STREAM_CLOSE_MSG(stream, msg) do {      \
+    if ((stream)->stream_close_msg == NULL) {       \
+        (stream)->stream_close_msg = (msg);         \
+    }                                               \
+} while(0)                                          \
 
 typedef enum {
     XQC_CLI_BID = 0,
@@ -29,6 +36,8 @@ typedef enum {
     XQC_STREAM_FLAG_NEED_CLOSE      = 1 << 5,
     XQC_STREAM_FLAG_FIN_WRITE       = 1 << 6,
     XQC_STREAM_FLAG_CLOSED          = 1 << 7,
+    XQC_STREAM_FLAG_UNEXPECTED      = 1 << 8,
+    XQC_STREAM_FLAG_DISCARDED       = 1 << 9,   /* stream create_notify with error, all stream data will be discarded */
 } xqc_stream_flag_t;
 
 typedef enum {
@@ -75,6 +84,7 @@ typedef struct xqc_stream_data_in_s {
     uint64_t                merged_offset_end;  /* [0,end) */
     uint64_t                next_read_offset;   /* next offset in stream */
     uint64_t                stream_length;
+    xqc_bool_t              stream_determined;
 } xqc_stream_data_in_t;
 
 
@@ -119,6 +129,7 @@ struct xqc_stream_s {
     xqc_recv_stream_state_t stream_state_recv;
     xqc_usec_t              stream_close_time;
     uint64_t                stream_err;
+    const char             *stream_close_msg;
 
     struct {
         xqc_usec_t          create_time;
@@ -126,6 +137,7 @@ struct xqc_stream_s {
         xqc_usec_t          peer_fin_read_time;     /* app read fin */
         xqc_usec_t          local_fin_write_time;   /* app send fin */
         xqc_usec_t          local_fin_snd_time;     /* socket send fin */
+        xqc_usec_t          local_fst_fin_snd_time; 
         xqc_usec_t          first_write_time;       /* app send data */
         xqc_usec_t          first_snd_time;         /* socket send data */
         xqc_usec_t          first_fin_ack_time;
@@ -134,7 +146,24 @@ struct xqc_stream_s {
         xqc_usec_t          app_reset_time;         /* app snd reset */
         xqc_usec_t          local_reset_time;       /* socket snd reset */
         xqc_usec_t          peer_reset_time;        /* quic stack rcv reset */
+        xqc_usec_t          first_rcv_time;         /* recv the first udp packet */
+        uint32_t            sched_cwnd_blk_cnt;  
+        uint32_t            send_cwnd_blk_cnt;
+        uint32_t            send_pacing_blk_cnt;  
+        xqc_usec_t          sched_cwnd_blk_duration;
+        xqc_usec_t          send_cwnd_blk_duration;
+        xqc_usec_t          send_pacing_blk_duration;  
+        uint32_t            retrans_pkt_cnt;
     } stream_stats;
+
+    xqc_path_metrics_t      paths_info[XQC_MAX_PATHS_COUNT];
+    uint8_t                 stream_mp_usage_schedule;
+    uint8_t                 stream_mp_usage_reinject;
+
+    uint64_t                recv_rate_bytes_per_sec;
+
+    char                    begin_trans_state[XQC_STREAM_TRANSPORT_STATE_SZ];
+    char                    end_trans_state[XQC_STREAM_TRANSPORT_STATE_SZ];
 };
 
 static inline xqc_stream_type_t
@@ -156,7 +185,9 @@ xqc_stream_is_uni(xqc_stream_id_t stream_id)
 }
 
 xqc_stream_t *xqc_create_stream_with_conn (xqc_connection_t *conn, xqc_stream_id_t stream_id,
-    xqc_stream_type_t stream_type, void *user_data);
+    xqc_stream_type_t stream_type, xqc_stream_settings_t *settings, void *user_data);
+
+void xqc_stream_record_trans_state(xqc_stream_t *stream, xqc_bool_t begin);
 
 void xqc_destroy_stream(xqc_stream_t *stream);
 
@@ -182,17 +213,19 @@ xqc_stream_t *xqc_find_stream_by_id(xqc_stream_id_t stream_id, xqc_id_hash_table
 
 void xqc_stream_set_flow_ctl(xqc_stream_t *stream);
 
+void xqc_stream_update_flow_ctl(xqc_stream_t *stream);
+
 int xqc_stream_do_send_flow_ctl(xqc_stream_t *stream);
 
 int xqc_stream_do_recv_flow_ctl(xqc_stream_t *stream);
 
 int xqc_stream_do_create_flow_ctl(xqc_connection_t *conn, xqc_stream_id_t stream_id, xqc_stream_type_t stream_type);
 
-uint64_t xqc_stream_get_init_max_stream_data(xqc_stream_t *stream);
+xqc_stream_t *xqc_passive_create_stream(xqc_connection_t *conn, xqc_stream_id_t stream_id, void *user_data);
 
-xqc_stream_t* xqc_passive_create_stream(xqc_connection_t *conn, xqc_stream_id_t stream_id, void *user_data);
+xqc_stream_t *xqc_create_crypto_stream(xqc_connection_t *conn, xqc_encrypt_level_t encrypt_level, void *user_data);
 
-xqc_stream_t* xqc_create_crypto_stream(xqc_connection_t *conn, xqc_encrypt_level_t encrypt_level, void *user_data);
+void xqc_destroy_crypto_stream(xqc_connection_t *conn, xqc_stream_t *stream);
 
 int xqc_crypto_stream_on_write(xqc_stream_t *stream, void *user_data);
 
@@ -219,6 +252,11 @@ xqc_stream_send_state_update(xqc_stream_t *stream, xqc_send_stream_state_t state
 void
 xqc_stream_recv_state_update(xqc_stream_t *stream, xqc_recv_stream_state_t state);
 
+void xqc_stream_set_multipath_usage(xqc_stream_t *stream, uint8_t schedule, uint8_t reinject);
+
+void xqc_stream_closing(xqc_stream_t *stream, xqc_int_t err);
+
+void xqc_stream_close_discarded_stream(xqc_stream_t *stream);
 
 #endif /* _XQC_STREAM_H_INCLUDED_ */
 

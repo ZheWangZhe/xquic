@@ -10,9 +10,11 @@
 #include "src/transport/xqc_cid.h"
 #include "src/transport/xqc_conn.h"
 #include "src/transport/xqc_stream.h"
+#include "src/transport/xqc_multipath.h"
 #include "src/transport/xqc_utils.h"
 #include "src/transport/xqc_defs.h"
 #include "src/tls/xqc_tls.h"
+#include "src/transport/xqc_datagram.h"
 
 xqc_connection_t *
 xqc_client_connect(xqc_engine_t *engine, const xqc_conn_settings_t *conn_settings,
@@ -62,12 +64,17 @@ xqc_client_connect(xqc_engine_t *engine, const xqc_conn_settings_t *conn_setting
         memcpy(xc->peer_addr, peer_addr, peer_addrlen);
     }
 
-    xqc_log(engine->log, XQC_LOG_DEBUG, "|xqc_connect|");
+    if (xqc_conn_client_init_path_addr(xc) != XQC_OK) {
+        return NULL;
+    }
+
     xqc_log_event(xc->log, CON_CONNECTION_STARTED, xc, XQC_LOG_REMOTE_EVENT);
 
     /* conn_create callback */
     if (xc->app_proto_cbs.conn_cbs.conn_create_notify) {
         if (xc->app_proto_cbs.conn_cbs.conn_create_notify(xc, &xc->scid_set.user_scid, user_data, NULL)) {
+            xqc_log(engine->log, XQC_LOG_INFO, "|destroy conn as create_notify return failure|conn:%p|%s",
+                    xc, xqc_conn_addr_str(xc));
             xqc_conn_destroy(xc);
             return NULL;
         }
@@ -83,7 +90,7 @@ xqc_client_connect(xqc_engine_t *engine, const xqc_conn_settings_t *conn_setting
         xc->conn_flag |= XQC_CONN_FLAG_TICKING;
     }
 
-    xqc_engine_main_logic_internal(engine, xc);
+    xqc_engine_main_logic_internal(engine);
 
     /* when the connection is destroyed in the main logic, we should return error to upper level */
     if (xqc_engine_conns_hash_find(engine, &scid, 's') == NULL) {
@@ -111,6 +118,7 @@ xqc_connect(xqc_engine_t *engine, const xqc_conn_settings_t *conn_settings,
         return &conn->scid_set.user_scid;
     }
 
+    xqc_log(engine->log, XQC_LOG_ERROR, "|xqc_client_connect error|");
     return NULL;
 }
 
@@ -151,7 +159,7 @@ xqc_client_create_tls(xqc_connection_t *conn, const xqc_conn_ssl_config_t *conn_
         ret = -XQC_EMALLOC;
         goto end;
     }
-    strncpy(cfg.alpn, alpn, alpn_cap);
+    memcpy(cfg.alpn, alpn, alpn_cap);
 
     /* copy hostname */
     host_cap = strlen(hostname) + 1;
@@ -161,7 +169,7 @@ xqc_client_create_tls(xqc_connection_t *conn, const xqc_conn_ssl_config_t *conn_
         ret = -XQC_EMALLOC;
         goto end;
     }
-    strncpy(cfg.hostname, hostname, host_cap);
+    memcpy(cfg.hostname, hostname, host_cap);
 
     /* encode local transport parameters, and set to tls config */
     cfg.trans_params = tp_buf;
@@ -246,11 +254,13 @@ xqc_client_create_connection(xqc_engine_t *engine, xqc_cid_t dcid, xqc_cid_t sci
     if (conn_ssl_config->transport_parameter_data
         && conn_ssl_config->transport_parameter_data_len > 0)
     {
-        xqc_memzero(&tp, sizeof(xqc_transport_params_t));
+        xqc_init_transport_params(&tp);
         ret = xqc_read_transport_params(conn_ssl_config->transport_parameter_data,
-                                                  conn_ssl_config->transport_parameter_data_len, &tp);
+                                        conn_ssl_config->transport_parameter_data_len, &tp);
         if (ret == XQC_OK) {
             xqc_conn_set_early_remote_transport_params(xc, &tp);
+            xqc_log(xc->log, XQC_LOG_DEBUG, "|0RTT_transport_params|max_datagram_frame_size:%ud|",
+                    xc->remote_settings.max_datagram_frame_size);
         }
     }
 
@@ -258,9 +268,13 @@ xqc_client_create_connection(xqc_engine_t *engine, xqc_cid_t dcid, xqc_cid_t sci
         goto fail;
     }
 
+    xqc_datagram_record_mss(xc);
+    
     return xc;
 
 fail:
+    xqc_log(xc->log, XQC_LOG_INFO, "|destroy conn as create failure|conn:%p|%s",
+            xc, xqc_conn_addr_str(xc));
     xqc_conn_destroy(xc);
     return NULL;
 }
